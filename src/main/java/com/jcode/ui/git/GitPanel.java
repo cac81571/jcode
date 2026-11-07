@@ -82,8 +82,8 @@ public final class GitPanel extends JPanel {
         unstage.addActionListener(e -> unstageSelected());
         discard.addActionListener(e -> discardSelected());
         commit.addActionListener(e -> commit());
-        initButton.addActionListener(e ->
-                statusLabel.setText("Use File → Open Folder on a git repo, or Init below after open"));
+        initButton.setToolTipText("このフォルダを Git リポジトリとして初期化");
+        updateInitButton();
 
         JPanel header = new JPanel(new BorderLayout());
         header.add(branchLabel, BorderLayout.WEST);
@@ -146,6 +146,7 @@ public final class GitPanel extends JPanel {
             this.git.close();
         }
         this.git = git;
+        updateInitButton();
         refresh();
     }
 
@@ -158,6 +159,15 @@ public final class GitPanel extends JPanel {
         changesModel.clear();
         branchLabel.setText("No repository");
         statusLabel.setText(" ");
+        updateInitButton();
+    }
+
+    private void updateInitButton() {
+        boolean hasRepo = git != null && git.isRepository();
+        initButton.setEnabled(!hasRepo);
+        initButton.setToolTipText(hasRepo
+                ? "すでに Git 管理されています"
+                : "このフォルダを Git リポジトリとして初期化");
     }
 
     public void refresh() {
@@ -165,6 +175,7 @@ public final class GitPanel extends JPanel {
             stagedModel.clear();
             changesModel.clear();
             branchLabel.setText("No repository");
+            updateInitButton();
             return;
         }
 

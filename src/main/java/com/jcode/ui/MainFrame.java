@@ -534,6 +534,11 @@ public final class MainFrame extends JFrame {
             JOptionPane.showMessageDialog(this, "Open a folder first.");
             return;
         }
+        if (gitService != null && gitService.isRepository()) {
+            JOptionPane.showMessageDialog(this, "すでに Git 管理されています。",
+                    "Git Init", JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
         try {
             gitService = GitService.init(workspaceRoot);
             gitPanel.bind(gitService);
