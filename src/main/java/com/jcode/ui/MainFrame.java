@@ -115,8 +115,8 @@ public final class MainFrame extends JFrame {
     }
 
     private void buildLayout() {
-        activityBar.addTab("Explorer", fileTree);
-        activityBar.addTab("Search", searchSidebar);
+        activityBar.addTab("エクスプローラー", fileTree);
+        activityBar.addTab("検索", searchSidebar);
         activityBar.addTab("Git", gitPanel);
         activityBar.setPreferredSize(new Dimension(420, 600));
         activityBar.setMinimumSize(new Dimension(360, 200));
@@ -139,10 +139,10 @@ public final class MainFrame extends JFrame {
     private void buildMenu() {
         JMenuBar bar = new JMenuBar();
 
-        JMenu file = new JMenu("File");
-        file.add(item("Open Folder…", KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> openFolder()));
-        file.add(item("Open File…", KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK), e -> openFileDialog()));
-        file.add(item("Go to File…", KeyStroke.getKeyStroke(KeyEvent.VK_P, InputEvent.CTRL_DOWN_MASK), e -> showQuickOpen()));
+        JMenu file = new JMenu("ファイル");
+        file.add(item("フォルダを開く…", KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> openFolder()));
+        file.add(item("ファイルを開く…", KeyStroke.getKeyStroke(KeyEvent.VK_O, InputEvent.CTRL_DOWN_MASK), e -> openFileDialog()));
+        file.add(item("ファイルへ移動…", KeyStroke.getKeyStroke(KeyEvent.VK_P, InputEvent.CTRL_DOWN_MASK), e -> showQuickOpen()));
         recentMenu = new JMenu("最近使った項目");
         file.add(recentMenu);
         refreshRecentMenu();
@@ -151,31 +151,31 @@ public final class MainFrame extends JFrame {
         file.add(item("サクラエディタで開く", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.ALT_DOWN_MASK), e -> openInSakura()));
         file.add(item("サクラエディタのパスを設定…", null, e -> configureSakuraPath()));
         file.addSeparator();
-        file.add(item("Save", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK), e -> save()));
-        file.add(item("Save All", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> saveAll()));
-        file.add(item("Close Editor", KeyStroke.getKeyStroke(KeyEvent.VK_W, InputEvent.CTRL_DOWN_MASK), e -> editors.closeActive()));
+        file.add(item("保存", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK), e -> save()));
+        file.add(item("すべて保存", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> saveAll()));
+        file.add(item("エディタを閉じる", KeyStroke.getKeyStroke(KeyEvent.VK_W, InputEvent.CTRL_DOWN_MASK), e -> editors.closeActive()));
         file.addSeparator();
-        file.add(item("Exit", KeyStroke.getKeyStroke(KeyEvent.VK_Q, InputEvent.CTRL_DOWN_MASK), e -> exit()));
+        file.add(item("終了", KeyStroke.getKeyStroke(KeyEvent.VK_Q, InputEvent.CTRL_DOWN_MASK), e -> exit()));
 
-        JMenu edit = new JMenu("Edit");
-        edit.add(item("Find", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showFind()));
-        edit.add(item("Replace", KeyStroke.getKeyStroke(KeyEvent.VK_H, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showReplace()));
-        edit.add(item("Search in Files", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
+        JMenu edit = new JMenu("編集");
+        edit.add(item("検索", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showFind()));
+        edit.add(item("置換", KeyStroke.getKeyStroke(KeyEvent.VK_H, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showReplace()));
+        edit.add(item("ファイル横断検索", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
             activityBar.setSelectedComponent(searchSidebar);
             searchSidebar.focusSearch();
         }));
 
-        JMenu view = new JMenu("View");
-        view.add(item("Explorer", KeyStroke.getKeyStroke(KeyEvent.VK_E, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> activityBar.setSelectedComponent(fileTree)));
-        view.add(item("Search", null, e -> {
+        JMenu view = new JMenu("表示");
+        view.add(item("エクスプローラー", KeyStroke.getKeyStroke(KeyEvent.VK_E, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> activityBar.setSelectedComponent(fileTree)));
+        view.add(item("検索", null, e -> {
             activityBar.setSelectedComponent(searchSidebar);
             searchSidebar.focusSearch();
         }));
-        view.add(item("Source Control", KeyStroke.getKeyStroke(KeyEvent.VK_G, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
+        view.add(item("ソース管理", KeyStroke.getKeyStroke(KeyEvent.VK_G, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
             activityBar.setSelectedComponent(gitPanel);
             gitPanel.refresh();
         }));
-        view.add(item("Refresh Explorer", KeyStroke.getKeyStroke(KeyEvent.VK_R, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> fileTree.refresh()));
+        view.add(item("エクスプローラーを更新", KeyStroke.getKeyStroke(KeyEvent.VK_R, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> fileTree.refresh()));
         view.addSeparator();
 
         JMenu theme = new JMenu("テーマ");
@@ -204,8 +204,8 @@ public final class MainFrame extends JFrame {
         });
 
         JMenu git = new JMenu("Git");
-        git.add(item("Refresh", null, e -> gitPanel.refresh()));
-        git.add(item("Initialize Repository", null, e -> initGit()));
+        git.add(item("更新", null, e -> gitPanel.refresh()));
+        git.add(item("リポジトリを初期化", null, e -> initGit()));
 
         bar.add(file);
         bar.add(edit);
