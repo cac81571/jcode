@@ -231,6 +231,12 @@ public final class MainFrame extends JFrame {
             openFile(path);
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor != null) {
+                editor.highlightAllMatches(
+                        searchSidebar.lastQuery(),
+                        searchSidebar.isMatchCase(),
+                        searchSidebar.isWholeWord(),
+                        searchSidebar.isRegex()
+                );
                 editor.highlightRange(match.lineNumber(), match.startColumn(), match.endColumn());
             }
         });

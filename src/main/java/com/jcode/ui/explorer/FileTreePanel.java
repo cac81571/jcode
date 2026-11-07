@@ -2,6 +2,7 @@ package com.jcode.ui.explorer;
 
 import com.jcode.service.ExternalOpener;
 import com.jcode.service.SakuraLauncher;
+import com.jcode.ui.ClipboardPaths;
 
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -9,6 +10,7 @@ import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JTree;
+import javax.swing.KeyStroke;
 import javax.swing.SwingWorker;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
@@ -16,6 +18,8 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
+import java.awt.event.InputEvent;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
@@ -97,6 +101,8 @@ public final class FileTreePanel extends JPanel {
             }
         });
 
+        ClipboardPaths.install(tree, this::selectedFile);
+
         add(new JScrollPane(tree), BorderLayout.CENTER);
         setEmpty();
     }
@@ -120,6 +126,17 @@ public final class FileTreePanel extends JPanel {
             sakura.addActionListener(e -> openInSakura(selected));
             menu.add(sakura);
         }
+
+        menu.addSeparator();
+        JMenuItem copyName = new JMenuItem("ファイル名をコピー");
+        copyName.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK));
+        copyName.addActionListener(e -> ClipboardPaths.copyFileName(selected));
+        menu.add(copyName);
+        JMenuItem copyPath = new JMenuItem("パスをコピー");
+        copyPath.setAccelerator(KeyStroke.getKeyStroke(
+                KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK));
+        copyPath.addActionListener(e -> ClipboardPaths.copyAbsolutePath(selected));
+        menu.add(copyPath);
 
         menu.show(tree, x, y);
     }

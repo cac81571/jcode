@@ -6,6 +6,7 @@ import com.jcode.model.SearchMatch;
 import com.jcode.service.SearchHistory;
 import com.jcode.service.SearchReportBuilder;
 import com.jcode.service.SearchService;
+import com.jcode.ui.ClipboardPaths;
 import com.jcode.ui.ThemeManager;
 
 import javax.swing.BorderFactory;
@@ -195,6 +196,7 @@ public final class SearchSidebar extends JPanel {
                 onOpenMatch.accept(first.file(), first);
             }
         });
+        ClipboardPaths.install(results, this::selectedResultPath);
 
         // Enter in the editor, or choosing a history item
         queryField.addActionListener(e -> runSearch());
@@ -216,6 +218,22 @@ public final class SearchSidebar extends JPanel {
 
     public void setOnOpenMatch(BiConsumer<Path, SearchMatch> onOpenMatch) {
         this.onOpenMatch = onOpenMatch;
+    }
+
+    public String lastQuery() {
+        return lastQuery;
+    }
+
+    public boolean isMatchCase() {
+        return matchCase.isSelected();
+    }
+
+    public boolean isWholeWord() {
+        return wholeWord.isSelected();
+    }
+
+    public boolean isRegex() {
+        return regex.isSelected();
     }
 
     public void setOnOpenInEditor(Consumer<SearchEditorRequest> onOpenInEditor) {
@@ -728,6 +746,21 @@ public final class SearchSidebar extends JPanel {
         public Dimension getMinimumSize() {
             return getPreferredSize();
         }
+    }
+
+    private Path selectedResultPath() {
+        Object last = results.getLastSelectedPathComponent();
+        if (!(last instanceof DefaultMutableTreeNode node)) {
+            return null;
+        }
+        Object user = node.getUserObject();
+        if (user instanceof SearchMatch match) {
+            return match.file();
+        }
+        if (user instanceof SearchFileGroup group) {
+            return group.file();
+        }
+        return null;
     }
 
     private void installFilterAutoSearch(JTextField field) {
