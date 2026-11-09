@@ -11,12 +11,15 @@ import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JLabel;
 import javax.swing.JList;
+import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
 import javax.swing.ListSelectionModel;
+import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
 import java.awt.BorderLayout;
 import java.awt.Component;
@@ -49,6 +52,12 @@ public final class GitPanel extends JPanel {
     private BiConsumer<DiffTexts, Boolean> onShowDiff = (d, staged) -> {
     };
     private final JButton initButton = new JButton("Init Repo");
+    private final GitLogPanel logPanel = new GitLogPanel();
+    private final GitStashPanel stashPanel = new GitStashPanel();
+    private final GitCommitFilesPanel filesPanel = new GitCommitFilesPanel();
+    private JSplitPane bodySplit;
+    private Runnable onRepositoryReset = () -> {
+    };
 
     public GitPanel() {
         super(new BorderLayout(0, 8));
@@ -56,6 +65,26 @@ public final class GitPanel extends JPanel {
 
         styleList(stagedList);
         styleList(changesList);
+        logPanel.setOnStatus(msg -> statusLabel.setText(msg));
+        logPanel.setOnReset(() -> {
+            refreshChangesOnly();
+            stashPanel.refresh();
+            onRepositoryReset.run();
+        });
+        logPanel.setOnCommitSelected(entry -> {
+            if (entry == null) {
+                filesPanel.clearFiles();
+            } else {
+                filesPanel.showCommit(entry.id());
+            }
+        });
+        filesPanel.setOnShowDiff(texts -> onShowDiff.accept(texts, false));
+        filesPanel.setOnStatus(msg -> statusLabel.setText(msg));
+        stashPanel.setOnStatus(msg -> statusLabel.setText(msg));
+        stashPanel.setOnChanged(() -> {
+            refreshChangesOnly();
+            onRepositoryReset.run();
+        });
 
         stagedList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
@@ -72,12 +101,21 @@ public final class GitPanel extends JPanel {
         installOpenOnDoubleClick(changesList);
 
         JButton refresh = new JButton("Refresh");
+        JButton switchBranch = new JButton("Switch");
+        JButton newBranch = new JButton("Create");
+        JButton deleteBranch = new JButton("Delete");
         JButton stage = new JButton("Stage");
         JButton unstage = new JButton("Unstage");
         JButton discard = new JButton("Discard");
         JButton commit = new JButton("Commit");
 
         refresh.addActionListener(e -> refresh());
+        switchBranch.setToolTipText("ブランチを切り替え");
+        newBranch.setToolTipText("現在の HEAD からブランチを作成して切り替え");
+        deleteBranch.setToolTipText("ローカルブランチを削除（現在のブランチ以外）");
+        switchBranch.addActionListener(e -> showSwitchBranchMenu(switchBranch));
+        newBranch.addActionListener(e -> createBranch());
+        deleteBranch.addActionListener(e -> deleteBranch());
         stage.addActionListener(e -> stageSelected());
         unstage.addActionListener(e -> unstageSelected());
         discard.addActionListener(e -> discardSelected());
@@ -85,12 +123,23 @@ public final class GitPanel extends JPanel {
         initButton.setToolTipText("このフォルダを Git リポジトリとして初期化");
         updateInitButton();
 
-        JPanel header = new JPanel(new BorderLayout());
-        header.add(branchLabel, BorderLayout.WEST);
-        JPanel headerBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        headerBtns.add(refresh);
-        headerBtns.add(initButton);
-        header.add(headerBtns, BorderLayout.EAST);
+        JPanel branchRowBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        branchRowBtns.add(refresh);
+        branchRowBtns.add(initButton);
+
+        JPanel branchRow = new JPanel(new BorderLayout(4, 0));
+        branchRow.add(branchLabel, BorderLayout.CENTER);
+        branchRow.add(branchRowBtns, BorderLayout.EAST);
+
+        JPanel branchActions = new JPanel(new WrapLayout(FlowLayout.LEFT, 4, 2));
+        branchActions.add(new JLabel("BRANCH"));
+        branchActions.add(switchBranch);
+        branchActions.add(newBranch);
+        branchActions.add(deleteBranch);
+
+        JPanel header = new JPanel(new BorderLayout(0, 4));
+        header.add(branchRow, BorderLayout.NORTH);
+        header.add(branchActions, BorderLayout.CENTER);
 
         JPanel stagedHeader = labeled("STAGED", unstage);
         JPanel changesHeader = labeled("CHANGES", stage, discard);
@@ -105,22 +154,52 @@ public final class GitPanel extends JPanel {
         changesPanel.add(new JScrollPane(changesList), BorderLayout.CENTER);
 
         JSplitPane listSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, stagedPanel, changesPanel);
-        listSplit.setResizeWeight(0.35);
+        listSplit.setResizeWeight(0.4);
         lists.add(listSplit, BorderLayout.CENTER);
+
+        JSplitPane changesAndStash = new JSplitPane(JSplitPane.VERTICAL_SPLIT, lists, stashPanel);
+        changesAndStash.setResizeWeight(0.78);
+        changesAndStash.setContinuousLayout(true);
+
+        JSplitPane leftColumn = new JSplitPane(JSplitPane.VERTICAL_SPLIT, changesAndStash, logPanel);
+        leftColumn.setResizeWeight(0.6);
+        leftColumn.setContinuousLayout(true);
 
         JPanel commitBar = new JPanel(new BorderLayout(4, 4));
         commitBar.add(commitMessage, BorderLayout.CENTER);
         commitBar.add(commit, BorderLayout.EAST);
         commitMessage.putClientProperty("JTextField.placeholderText", "Message (Ctrl+Enter to commit)");
 
-        // Commit above STAGED: header → commit → staged/changes lists
-        JPanel north = new JPanel(new BorderLayout(0, 8));
-        north.add(header, BorderLayout.NORTH);
-        north.add(commitBar, BorderLayout.SOUTH);
+        // Left: branch → commit → STAGED/CHANGES/STASH/HISTORY
+        JPanel leftNorth = new JPanel(new BorderLayout(0, 8));
+        leftNorth.add(header, BorderLayout.NORTH);
+        leftNorth.add(commitBar, BorderLayout.SOUTH);
 
-        add(north, BorderLayout.NORTH);
-        add(lists, BorderLayout.CENTER);
+        JPanel leftStack = new JPanel(new BorderLayout(0, 8));
+        leftStack.add(leftNorth, BorderLayout.NORTH);
+        leftStack.add(leftColumn, BorderLayout.CENTER);
+
+        // FILES spans full height (aligned with branch row at top); ~equal width with left column
+        bodySplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftStack, filesPanel);
+        bodySplit.setResizeWeight(0.5);
+        bodySplit.setContinuousLayout(true);
+
+        add(bodySplit, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
+    }
+
+    /** Split left column and FILES roughly 50/50 (call after the Git tab is shown). */
+    public void balanceColumns() {
+        if (bodySplit == null) {
+            return;
+        }
+        SwingUtilities.invokeLater(() -> {
+            if (bodySplit.getWidth() <= 0) {
+                SwingUtilities.invokeLater(this::balanceColumns);
+                return;
+            }
+            bodySplit.setDividerLocation(0.5);
+        });
     }
 
     public JButton getInitButton() {
@@ -141,11 +220,19 @@ public final class GitPanel extends JPanel {
         this.onShowDiff = onShowDiff;
     }
 
+    /** After Soft/Mixed/Hard reset — reload editors / explorer. */
+    public void setOnRepositoryReset(Runnable onRepositoryReset) {
+        this.onRepositoryReset = onRepositoryReset;
+    }
+
     public void bind(GitService git) {
         if (this.git != null) {
             this.git.close();
         }
         this.git = git;
+        logPanel.bind(git);
+        stashPanel.bind(git);
+        filesPanel.bind(git);
         updateInitButton();
         refresh();
     }
@@ -157,6 +244,9 @@ public final class GitPanel extends JPanel {
         }
         stagedModel.clear();
         changesModel.clear();
+        logPanel.clear();
+        stashPanel.clear();
+        filesPanel.clear();
         branchLabel.setText("No repository");
         statusLabel.setText(" ");
         updateInitButton();
@@ -171,6 +261,21 @@ public final class GitPanel extends JPanel {
     }
 
     public void refresh() {
+        if (git == null) {
+            stagedModel.clear();
+            changesModel.clear();
+            logPanel.clear();
+            stashPanel.clear();
+            branchLabel.setText("No repository");
+            updateInitButton();
+            return;
+        }
+        refreshChangesOnly();
+        logPanel.refresh();
+        stashPanel.refresh();
+    }
+
+    private void refreshChangesOnly() {
         if (git == null) {
             stagedModel.clear();
             changesModel.clear();
@@ -292,6 +397,136 @@ public final class GitPanel extends JPanel {
             commitMessage.setText("");
             refresh();
             statusLabel.setText("Committed");
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void showSwitchBranchMenu(Component invoker) {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        try {
+            String current = git.currentBranch();
+            List<String> branches = git.listBranches();
+            if (branches.isEmpty()) {
+                statusLabel.setText("ブランチがありません");
+                return;
+            }
+            JPopupMenu menu = new JPopupMenu();
+            for (String branch : branches) {
+                boolean active = branch.equals(current);
+                JMenuItem item = new JMenuItem(active ? "● " + branch : "    " + branch);
+                item.setEnabled(!active);
+                item.addActionListener(e -> checkoutBranch(branch));
+                menu.add(item);
+            }
+            menu.show(invoker, 0, invoker.getHeight());
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void checkoutBranch(String branch) {
+        if (git == null || branch == null) {
+            return;
+        }
+        try {
+            git.checkoutBranch(branch);
+            refresh();
+            onRepositoryReset.run();
+            statusLabel.setText("切替: " + branch);
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void createBranch() {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        String name = JOptionPane.showInputDialog(
+                this,
+                "新しいブランチ名（作成して切り替えます）:",
+                "新規ブランチ",
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (name == null) {
+            return;
+        }
+        name = name.trim();
+        if (name.isEmpty()) {
+            return;
+        }
+        try {
+            git.createAndCheckoutBranch(name);
+            refresh();
+            onRepositoryReset.run();
+            statusLabel.setText("作成して切替: " + name);
+        } catch (Exception ex) {
+            showError(ex);
+        }
+    }
+
+    private void deleteBranch() {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        try {
+            String current = git.currentBranch();
+            List<String> candidates = git.listBranches().stream()
+                    .filter(b -> !b.equals(current))
+                    .toList();
+            if (candidates.isEmpty()) {
+                JOptionPane.showMessageDialog(this,
+                        "削除できるブランチがありません。\n（現在のブランチ以外が必要です）",
+                        "ブランチ削除", JOptionPane.INFORMATION_MESSAGE);
+                return;
+            }
+            Object selected = JOptionPane.showInputDialog(
+                    this,
+                    "削除するブランチを選択:",
+                    "ブランチ削除",
+                    JOptionPane.QUESTION_MESSAGE,
+                    null,
+                    candidates.toArray(),
+                    candidates.getFirst()
+            );
+            if (selected == null) {
+                return;
+            }
+            String branch = selected.toString();
+            int confirm = JOptionPane.showConfirmDialog(
+                    this,
+                    "ブランチ「" + branch + "」を削除しますか？",
+                    "ブランチ削除",
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (confirm != JOptionPane.OK_OPTION) {
+                return;
+            }
+            try {
+                git.deleteBranch(branch, false);
+            } catch (Exception notMerged) {
+                int force = JOptionPane.showConfirmDialog(
+                        this,
+                        "通常削除できませんでした:\n" + notMerged.getMessage()
+                                + "\n\n強制削除しますか？（未マージのコミットが失われる可能性があります）",
+                        "強制削除",
+                        JOptionPane.YES_NO_OPTION,
+                        JOptionPane.WARNING_MESSAGE
+                );
+                if (force != JOptionPane.YES_OPTION) {
+                    return;
+                }
+                git.deleteBranch(branch, true);
+            }
+            refresh();
+            statusLabel.setText("削除: " + branch);
         } catch (Exception ex) {
             showError(ex);
         }

@@ -142,9 +142,7 @@ public final class CodeEditorPane {
         Highlighter highlighter = textArea.getHighlighter();
         boolean dark = ThemeManager.isDark();
         Color lineColor = dark ? new Color(36, 58, 88) : new Color(210, 230, 255);
-        SmartHighlightPainter matchPainter = new SmartHighlightPainter(
-                dark ? new Color(255, 160, 0) : new Color(255, 140, 0)
-        );
+        SmartHighlightPainter matchPainter = new SmartHighlightPainter(matchHighlightColor(dark));
         matchPainter.setPaintBorder(true);
 
         Pattern hitLine = Pattern.compile("(?m)^[ \\t]*\\d+:.*$");
@@ -189,9 +187,7 @@ public final class CodeEditorPane {
         String text = textArea.getText();
         Highlighter highlighter = textArea.getHighlighter();
         boolean dark = ThemeManager.isDark();
-        SmartHighlightPainter painter = new SmartHighlightPainter(
-                dark ? new Color(255, 160, 0) : new Color(255, 140, 0)
-        );
+        SmartHighlightPainter painter = new SmartHighlightPainter(matchHighlightColor(dark));
         painter.setPaintBorder(true);
         int count = 0;
         Matcher matcher = pattern.matcher(text);
@@ -282,6 +278,11 @@ public final class CodeEditorPane {
 
     private void markDirty() {
         dirty = !textArea.getText().equals(lastSavedText);
+    }
+
+    /** Soft amber so matches stay visible without overpowering the text. */
+    private static Color matchHighlightColor(boolean dark) {
+        return dark ? new Color(255, 210, 140) : new Color(255, 230, 180);
     }
 
     public void applyEditorTheme() {

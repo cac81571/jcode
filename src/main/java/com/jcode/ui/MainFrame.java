@@ -50,9 +50,16 @@ public final class MainFrame extends JFrame {
     private final StatusBar statusBar = new StatusBar();
     private final JTabbedPane activityBar = new JTabbedPane(JTabbedPane.TOP);
 
+    /** Default activity-bar width; widened while Git is selected so FILES fits beside it. */
+    private static final int SIDEBAR_WIDTH = 420;
+    private static final int GIT_SIDEBAR_WIDTH = 760;
+
     private Path workspaceRoot;
     private GitService gitService;
     private JMenu recentMenu;
+    private JSplitPane mainSplit;
+    private int sidebarWidthBeforeGit = SIDEBAR_WIDTH;
+    private boolean gitSidebarActive;
 
     public MainFrame() {
         super("jcode");
@@ -118,22 +125,43 @@ public final class MainFrame extends JFrame {
         activityBar.addTab("エクスプローラー", fileTree);
         activityBar.addTab("検索", searchSidebar);
         activityBar.addTab("Git", gitPanel);
-        activityBar.setPreferredSize(new Dimension(420, 600));
-        activityBar.setMinimumSize(new Dimension(360, 200));
+        activityBar.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 600));
+        activityBar.setMinimumSize(new Dimension(280, 200));
 
         JPanel editorArea = new JPanel(new BorderLayout());
         editorArea.add(findReplaceBar, BorderLayout.NORTH);
         editorArea.add(editors.getComponent(), BorderLayout.CENTER);
 
-        JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorArea);
-        split.setResizeWeight(0.28);
-        split.setDividerLocation(420);
+        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorArea);
+        mainSplit.setResizeWeight(0.28);
+        mainSplit.setDividerLocation(SIDEBAR_WIDTH);
+
+        activityBar.addChangeListener(e -> syncSidebarWidthForActivityTab());
 
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
-        root.add(split, BorderLayout.CENTER);
+        root.add(mainSplit, BorderLayout.CENTER);
         root.add(statusBar, BorderLayout.SOUTH);
         setContentPane(root);
+    }
+
+    /** Widen the left pane only while Git is open; restore prior width otherwise. */
+    private void syncSidebarWidthForActivityTab() {
+        if (mainSplit == null) {
+            return;
+        }
+        boolean gitOpen = activityBar.getSelectedComponent() == gitPanel;
+        if (gitOpen && !gitSidebarActive) {
+            sidebarWidthBeforeGit = mainSplit.getDividerLocation();
+            mainSplit.setDividerLocation(Math.max(sidebarWidthBeforeGit, GIT_SIDEBAR_WIDTH));
+            gitSidebarActive = true;
+            gitPanel.balanceColumns();
+        } else if (gitOpen) {
+            gitPanel.balanceColumns();
+        } else if (gitSidebarActive) {
+            mainSplit.setDividerLocation(sidebarWidthBeforeGit);
+            gitSidebarActive = false;
+        }
     }
 
     private void buildMenu() {
@@ -270,6 +298,10 @@ public final class MainFrame extends JFrame {
         });
         gitPanel.setOnWorkingTreeChanged(path -> {
             editors.reloadFromDisk(java.util.List.of(path));
+            fileTree.refresh();
+        });
+        gitPanel.setOnRepositoryReset(() -> {
+            editors.reloadAllFromDisk();
             fileTree.refresh();
         });
         gitPanel.getInitButton().addActionListener(e -> initGit());

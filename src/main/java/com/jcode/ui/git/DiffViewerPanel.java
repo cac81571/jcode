@@ -1,8 +1,5 @@
 package com.jcode.ui.git;
 
-import com.github.difflib.DiffUtils;
-import com.github.difflib.UnifiedDiffUtils;
-import com.github.difflib.patch.Patch;
 import com.github.difflib.text.DiffRow;
 import com.github.difflib.text.DiffRowGenerator;
 import com.jcode.model.DiffTexts;
@@ -63,6 +60,7 @@ public final class DiffViewerPanel extends JPanel {
     private final List<Object> unifiedLineTags = new ArrayList<>();
     private final List<Object> leftInlineTags = new ArrayList<>();
     private final List<Object> rightInlineTags = new ArrayList<>();
+    private final List<Object> unifiedInlineTags = new ArrayList<>();
 
     private DiffTexts current;
     private Mode mode = Mode.SIDE_BY_SIDE;
@@ -76,11 +74,11 @@ public final class DiffViewerPanel extends JPanel {
         group.add(unifiedBtn);
         sideBySideBtn.addActionListener(e -> setMode(Mode.SIDE_BY_SIDE));
         unifiedBtn.addActionListener(e -> setMode(Mode.UNIFIED));
-        contextSpinner.setToolTipText("左右分割時、変更箇所の前後に残す行数");
+        contextSpinner.setToolTipText("変更箇所の前後に残す行数");
         ((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField().setColumns(2);
         contextSpinner.addChangeListener(e -> {
-            if (current != null && mode == Mode.SIDE_BY_SIDE) {
-                renderSideBySide(current);
+            if (current != null) {
+                showDiff(current);
             }
         });
 
@@ -215,10 +213,12 @@ public final class DiffViewerPanel extends JPanel {
                 case INSERT -> {
                     left.append('\n');
                     leftColors.add(null);
-                    appendParsedLine(row.getNewLine(), right, rightColors, rightInline, insert);
+                    // Whole-line color only; no orange inline on pure adds
+                    appendParsedLine(row.getNewLine(), right, rightColors, null, insert);
                 }
                 case DELETE -> {
-                    appendParsedLine(row.getOldLine(), left, leftColors, leftInline, delete);
+                    // Whole-line color only; no orange inline on pure deletes
+                    appendParsedLine(row.getOldLine(), left, leftColors, null, delete);
                     right.append('\n');
                     rightColors.add(null);
                 }
@@ -265,6 +265,9 @@ public final class DiffViewerPanel extends JPanel {
         ParsedLine parsed = parseInline(unescape(raw == null ? "" : raw));
         out.append(parsed.text()).append('\n');
         lineColors.add(lineColor);
+        if (inlineRanges == null) {
+            return;
+        }
         for (int[] range : parsed.ranges()) {
             inlineRanges.add(new int[]{lineStart + range[0], lineStart + range[1]});
         }
@@ -345,42 +348,86 @@ public final class DiffViewerPanel extends JPanel {
         List<String> oldLines = toLines(texts.oldText());
         List<String> newLines = toLines(texts.newText());
 
-        Patch<String> patch = DiffUtils.diff(oldLines, newLines);
-        List<String> unified = UnifiedDiffUtils.generateUnifiedDiff(
-                "a/" + texts.path(),
-                "b/" + texts.path(),
-                oldLines,
-                patch,
-                3
-        );
+        DiffRowGenerator generator = DiffRowGenerator.create()
+                .showInlineDiffs(true)
+                .inlineDiffByWord(true)
+                .oldTag(open -> open ? String.valueOf(INLINE_OPEN) : String.valueOf(INLINE_CLOSE))
+                .newTag(open -> open ? String.valueOf(INLINE_OPEN) : String.valueOf(INLINE_CLOSE))
+                .ignoreWhiteSpaces(false)
+                .build();
+        List<DiffRow> rows = generator.generateDiffRows(oldLines, newLines);
+        int context = (Integer) contextSpinner.getValue();
+        List<SideRow> visible = collapseToNearbyChanges(rows, context);
 
         StringBuilder content = new StringBuilder();
         List<Color> colors = new ArrayList<>();
+        List<int[]> inline = new ArrayList<>();
         Color delete = deleteColor();
         Color insert = insertColor();
-        Color meta = metaColor();
+        Color gap = metaColor();
 
-        for (String line : unified) {
-            content.append(line).append('\n');
-            if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
-                colors.add(meta);
-            } else if (line.startsWith("+")) {
-                colors.add(insert);
-            } else if (line.startsWith("-")) {
-                colors.add(delete);
-            } else {
-                colors.add(null);
+        content.append("--- a/").append(texts.path()).append('\n');
+        colors.add(gap);
+        content.append("+++ b/").append(texts.path()).append('\n');
+        colors.add(gap);
+
+        for (SideRow item : visible) {
+            if (item.separator()) {
+                content.append("⋯\n");
+                colors.add(gap);
+                continue;
+            }
+            DiffRow row = item.row();
+            switch (row.getTag()) {
+                case INSERT ->
+                        appendUnifiedLine(row.getNewLine(), '+', content, colors, null, insert);
+                case DELETE ->
+                        appendUnifiedLine(row.getOldLine(), '-', content, colors, null, delete);
+                case CHANGE -> {
+                    // Orange only on changed spans within -/+, not on pure add/delete rows
+                    appendUnifiedLine(row.getOldLine(), '-', content, colors, inline, delete);
+                    appendUnifiedLine(row.getNewLine(), '+', content, colors, inline, insert);
+                }
+                default ->
+                        appendUnifiedLine(row.getOldLine(), ' ', content, colors, null, null);
             }
         }
 
-        unifiedArea.setText(trimTrailingNewline(content));
+        if (visible.isEmpty()) {
+            unifiedArea.setText("(差分なし)");
+        } else {
+            unifiedArea.setText(trimTrailingNewline(content));
+        }
         unifiedArea.setCaretPosition(0);
         applyLineColors(unifiedArea, unifiedScroll, colors, unifiedLineTags);
+        applyInlineHighlights(unifiedArea, inline, unifiedInlineTags);
 
         body.removeAll();
         body.add(unifiedScroll, BorderLayout.CENTER);
         body.revalidate();
         body.repaint();
+    }
+
+    /** Append one unified line (` `, `+`, or `-` prefix). Inline ranges skip the prefix char. */
+    private static void appendUnifiedLine(
+            String raw,
+            char prefix,
+            StringBuilder out,
+            List<Color> lineColors,
+            List<int[]> inlineRanges,
+            Color lineColor
+    ) {
+        int lineStart = out.length();
+        ParsedLine parsed = parseInline(unescape(raw == null ? "" : raw));
+        out.append(prefix).append(parsed.text()).append('\n');
+        lineColors.add(lineColor);
+        if (inlineRanges == null) {
+            return;
+        }
+        int contentStart = lineStart + 1;
+        for (int[] range : parsed.ranges()) {
+            inlineRanges.add(new int[]{contentStart + range[0], contentStart + range[1]});
+        }
     }
 
     private void applyLineColors(
@@ -445,6 +492,11 @@ public final class DiffViewerPanel extends JPanel {
             rightHl.removeHighlight(tag);
         }
         rightInlineTags.clear();
+        Highlighter unifiedHl = unifiedArea.getHighlighter();
+        for (Object tag : unifiedInlineTags) {
+            unifiedHl.removeHighlight(tag);
+        }
+        unifiedInlineTags.clear();
     }
 
     private static RSyntaxTextArea createArea() {
@@ -513,6 +565,6 @@ public final class DiffViewerPanel extends JPanel {
     }
 
     private static Color inlineColor() {
-        return ThemeManager.isDark() ? new Color(255, 160, 0) : new Color(255, 140, 0);
+        return ThemeManager.isDark() ? new Color(255, 210, 140) : new Color(255, 230, 180);
     }
 }

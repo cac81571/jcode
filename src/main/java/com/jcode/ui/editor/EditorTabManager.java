@@ -6,11 +6,21 @@ import com.jcode.service.SakuraLauncher;
 import com.jcode.ui.git.DiffViewerPanel;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 
+import javax.swing.BorderFactory;
+import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JPopupMenu;
 import javax.swing.JTabbedPane;
+import java.awt.BasicStroke;
+import java.awt.Color;
 import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.FlowLayout;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.io.IOException;
@@ -59,6 +69,8 @@ public final class EditorTabManager {
         CodeEditorPane editor = new CodeEditorPane(key);
         openEditors.put(key, editor);
         tabs.addTab(tabTitle(editor), editor.getComponent());
+        int index = tabs.indexOfComponent(editor.getComponent());
+        tabs.setTabComponentAt(index, createTabHeader(tabTitle(editor), () -> closeEditor(editor)));
         tabs.setSelectedComponent(editor.getComponent());
         return editor;
     }
@@ -70,15 +82,20 @@ public final class EditorTabManager {
         if (texts == null) {
             return;
         }
+        String title = diffTabTitle(texts, staged);
         if (diffViewer == null) {
             diffViewer = new DiffViewerPanel();
-            tabs.addTab(diffTabTitle(texts, staged), diffViewer);
+            tabs.addTab(title, diffViewer);
+            int index = tabs.indexOfComponent(diffViewer);
+            tabs.setTabComponentAt(index, createTabHeader(title, this::closeDiffTab));
         } else {
             int index = tabs.indexOfComponent(diffViewer);
             if (index < 0) {
-                tabs.addTab(diffTabTitle(texts, staged), diffViewer);
+                tabs.addTab(title, diffViewer);
+                index = tabs.indexOfComponent(diffViewer);
+                tabs.setTabComponentAt(index, createTabHeader(title, this::closeDiffTab));
             } else {
-                tabs.setTitleAt(index, diffTabTitle(texts, staged));
+                updateTabHeaderTitle(index, title);
             }
         }
         diffViewer.showDiff(texts);
@@ -96,7 +113,7 @@ public final class EditorTabManager {
             existing.replaceContent(content);
             int index = tabs.indexOfComponent(existing.getComponent());
             if (index >= 0) {
-                tabs.setTitleAt(index, title);
+                updateTabHeaderTitle(index, title);
             }
             tabs.setSelectedComponent(existing.getComponent());
             existing.getTextArea().requestFocusInWindow();
@@ -105,6 +122,8 @@ public final class EditorTabManager {
         CodeEditorPane editor = CodeEditorPane.virtual(title, key, content, SyntaxConstants.SYNTAX_STYLE_NONE);
         openEditors.put(key, editor);
         tabs.addTab(title, editor.getComponent());
+        int index = tabs.indexOfComponent(editor.getComponent());
+        tabs.setTabComponentAt(index, createTabHeader(title, () -> closeEditor(editor)));
         tabs.setSelectedComponent(editor.getComponent());
         editor.getTextArea().requestFocusInWindow();
         return editor;
@@ -160,6 +179,21 @@ public final class EditorTabManager {
             Path key = file.toAbsolutePath().normalize();
             CodeEditorPane editor = openEditors.get(key);
             if (editor == null || editor.isVirtual()) {
+                continue;
+            }
+            try {
+                editor.reloadFromDisk();
+                refreshTabTitle(editor);
+            } catch (IOException ignored) {
+                // leave buffer as-is
+            }
+        }
+    }
+
+    /** Reload every non-virtual open editor from disk (e.g. after git reset --hard). */
+    public void reloadAllFromDisk() {
+        for (CodeEditorPane editor : List.copyOf(openEditors.values())) {
+            if (editor.isVirtual()) {
                 continue;
             }
             try {
@@ -361,8 +395,31 @@ public final class EditorTabManager {
     private void refreshTabTitle(CodeEditorPane editor) {
         int index = tabs.indexOfComponent(editor.getComponent());
         if (index >= 0) {
-            tabs.setTitleAt(index, tabTitle(editor));
+            updateTabHeaderTitle(index, tabTitle(editor));
         }
+    }
+
+    private void updateTabHeaderTitle(int index, String title) {
+        tabs.setTitleAt(index, title);
+        Component header = tabs.getTabComponentAt(index);
+        if (header instanceof TabHeader tabHeader) {
+            tabHeader.setTitle(title);
+        } else if (header == null) {
+            Component content = tabs.getComponentAt(index);
+            Runnable closer;
+            if (content == diffViewer) {
+                closer = this::closeDiffTab;
+            } else {
+                CodeEditorPane editor = findByComponent(content);
+                closer = editor == null ? () -> {
+                } : () -> closeEditor(editor);
+            }
+            tabs.setTabComponentAt(index, createTabHeader(title, closer));
+        }
+    }
+
+    private TabHeader createTabHeader(String title, Runnable onClose) {
+        return new TabHeader(title, onClose);
     }
 
     private static String tabTitle(CodeEditorPane editor) {
@@ -373,5 +430,66 @@ public final class EditorTabManager {
     private static String diffTabTitle(DiffTexts texts, boolean staged) {
         String name = Path.of(texts.path()).getFileName().toString();
         return (staged ? "Diff (staged): " : "Diff: ") + name;
+    }
+
+    private static final class TabHeader extends JPanel {
+        private final JLabel titleLabel = new JLabel();
+
+        TabHeader(String title, Runnable onClose) {
+            super(new FlowLayout(FlowLayout.LEFT, 4, 0));
+            setOpaque(false);
+            JButton close = new CloseTabButton();
+            close.setToolTipText("閉じる");
+            close.addActionListener(e -> onClose.run());
+            add(close);
+
+            titleLabel.setText(title);
+            titleLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
+            add(titleLabel);
+        }
+
+        void setTitle(String title) {
+            titleLabel.setText(title);
+        }
+    }
+
+    private static final class CloseTabButton extends JButton {
+        CloseTabButton() {
+            setPreferredSize(new Dimension(16, 16));
+            setMinimumSize(new Dimension(16, 16));
+            setMaximumSize(new Dimension(16, 16));
+            setFocusable(false);
+            setBorder(BorderFactory.createEmptyBorder());
+            setContentAreaFilled(false);
+            setOpaque(false);
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    setOpaque(true);
+                    setBackground(new Color(180, 180, 180, 120));
+                    repaint();
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    setOpaque(false);
+                    repaint();
+                }
+            });
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setStroke(new BasicStroke(1.4f));
+            g2.setColor(getModel().isRollover() ? Color.DARK_GRAY : new Color(100, 100, 100));
+            int pad = 4;
+            int w = getWidth();
+            int h = getHeight();
+            g2.drawLine(pad, pad, w - pad - 1, h - pad - 1);
+            g2.drawLine(w - pad - 1, pad, pad, h - pad - 1);
+            g2.dispose();
+        }
     }
 }
