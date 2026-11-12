@@ -863,8 +863,8 @@ public final class SearchSidebar extends JPanel {
     private void installFilterAutoSearch(JComboBox<String> field) {
         // Enter in the editor only — avoid combo ActionEvent (fires on history reload / setItem)
         Component editor = field.getEditor().getEditorComponent();
-        if (editor instanceof JTextComponent text) {
-            text.addActionListener(e -> {
+        if (editor instanceof JTextField textField) {
+            textField.addActionListener(e -> {
                 if (!suppressFilterAutoSearch) {
                     runSearch();
                 }
