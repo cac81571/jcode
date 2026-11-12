@@ -3,6 +3,7 @@ package com.jcode.ui.search;
 import com.jcode.model.ReplaceResult;
 import com.jcode.model.SearchFileGroup;
 import com.jcode.model.SearchMatch;
+import com.jcode.service.FilePathFilter;
 import com.jcode.service.SearchHistory;
 import com.jcode.service.SearchReportBuilder;
 import com.jcode.service.SearchService;
@@ -16,6 +17,7 @@ import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -56,13 +58,16 @@ public final class SearchSidebar extends JPanel {
     private static final int PATH_MAX = 36;
 
     private final DefaultComboBoxModel<String> historyModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> includeHistoryModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> excludeHistoryModel = new DefaultComboBoxModel<>();
     private final JComboBox<String> queryField = new JComboBox<>(historyModel);
     private final JTextField replaceField = new JTextField();
-    private final JTextField includeField = new JTextField();
-    private final JTextField excludeField = new JTextField();
+    private final JComboBox<String> includeField = new JComboBox<>(includeHistoryModel);
+    private final JComboBox<String> excludeField = new JComboBox<>(excludeHistoryModel);
     private final JCheckBox matchCase = new JCheckBox("大文字小文字を区別");
     private final JCheckBox wholeWord = new JCheckBox("単語単位");
     private final JCheckBox regex = new JCheckBox("正規表現");
+    private final JCheckBox openFileOnly = new JCheckBox("開いているファイルのみ");
     private final JSpinner contextSpinner = new JSpinner(new SpinnerNumberModel(1, 0, 20, 1));
     private final JLabel summary = new JLabel(" ");
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("results");
@@ -71,12 +76,17 @@ public final class SearchSidebar extends JPanel {
     private final JButton openInEditorBtn = new JButton("エディタで開く");
     private final JButton replaceAllBtn = new JButton("すべて置換");
     private final Supplier<Path> workspaceRoot;
+    private Supplier<ActiveFile> activeFile = () -> null;
     private BiConsumer<Path, SearchMatch> onOpenMatch = (p, m) -> {
     };
     private Consumer<SearchEditorRequest> onOpenInEditor = r -> {
     };
     private Consumer<ReplaceResult> onReplaced = r -> {
     };
+
+    /** Currently focused editor file (disk path + buffer text, including unsaved edits). */
+    public record ActiveFile(Path path, String text) {
+    }
 
     private List<SearchFileGroup> lastGroups = List.of();
     private String lastQuery = "";
@@ -89,16 +99,29 @@ public final class SearchSidebar extends JPanel {
         matchCase.setToolTipText("大文字と小文字を区別して検索");
         wholeWord.setToolTipText("単語単位で一致");
         regex.setToolTipText("正規表現で検索");
+        openFileOnly.setToolTipText("エディタで選択中のファイルだけを検索（未保存の内容も対象）。Include / Exclude も適用");
         matchCase.addActionListener(e -> runSearch());
         wholeWord.addActionListener(e -> runSearch());
         regex.addActionListener(e -> runSearch());
+        openFileOnly.addActionListener(e -> runSearch());
         contextSpinner.setToolTipText("エディタ表示時の前後行数 (±N)。サイドバーには出ません");
         ((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField().setColumns(2);
 
         queryField.setEditable(true);
         queryField.setToolTipText("検索キーワード（履歴から選択可 / 右クリックで履歴クリア）");
+        includeField.setEditable(true);
+        excludeField.setEditable(true);
+        includeField.setToolTipText("files to include（カンマ区切りの glob。空ならすべて / 履歴あり）");
+        excludeField.setToolTipText("files to exclude（カンマ区切りの glob / 履歴あり）");
+        setComboPlaceholder(includeField, "例: *.java, src/**");
+        setComboPlaceholder(excludeField, "例: **/test/**, *.min.js");
         reloadHistoryModel();
-        installHistoryPopup();
+        reloadFilterHistoryModels();
+        installHistoryPopup(queryField, SearchHistory.Kind.QUERY, "検索履歴をクリア");
+        installHistoryPopup(includeField, SearchHistory.Kind.INCLUDE, "Include 履歴をクリア");
+        installHistoryPopup(excludeField, SearchHistory.Kind.EXCLUDE, "Exclude 履歴をクリア");
+        installFilterAutoSearch(includeField);
+        installFilterAutoSearch(excludeField);
 
         JPanel opts = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         opts.add(matchCase);
@@ -111,12 +134,6 @@ public final class SearchSidebar extends JPanel {
 
         replaceField.putClientProperty("JTextField.placeholderText", "置換文字列");
         replaceField.setToolTipText("置換後の文字列");
-        includeField.putClientProperty("JTextField.placeholderText", "例: *.java, src/**");
-        includeField.setToolTipText("files to include（カンマ区切りの glob。空ならすべて）");
-        excludeField.putClientProperty("JTextField.placeholderText", "例: **/test/**, *.min.js");
-        excludeField.setToolTipText("files to exclude（カンマ区切りの glob）");
-        installFilterAutoSearch(includeField);
-        installFilterAutoSearch(excludeField);
 
         JButton searchBtn = new JButton("検索");
         searchBtn.addActionListener(e -> runSearch());
@@ -148,18 +165,28 @@ public final class SearchSidebar extends JPanel {
         JPanel includeRow = labeledRow(includeLabel, includeField);
         JPanel excludeRow = labeledRow(excludeLabel, excludeField);
 
-        JPanel foldRow = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        foldRow.add(expandAllBtn);
-        foldRow.add(collapseAllBtn);
+        JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        foldBtns.add(expandAllBtn);
+        foldBtns.add(collapseAllBtn);
 
-        JPanel filterBlock = new JPanel(new BorderLayout(4, 4));
-        filterBlock.add(includeRow, BorderLayout.NORTH);
-        filterBlock.add(excludeRow, BorderLayout.CENTER);
+        JPanel scopeRow = new JPanel(new BorderLayout(4, 0));
+        scopeRow.add(openFileOnly, BorderLayout.WEST);
+        scopeRow.add(foldBtns, BorderLayout.EAST);
+
+        JPanel filterBlock = new JPanel();
+        filterBlock.setLayout(new BoxLayout(filterBlock, BoxLayout.Y_AXIS));
+        includeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        excludeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        scopeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        filterBlock.add(includeRow);
+        filterBlock.add(Box.createVerticalStrut(4));
+        filterBlock.add(excludeRow);
+        filterBlock.add(Box.createVerticalStrut(4));
+        filterBlock.add(scopeRow);
 
         JPanel mid = new JPanel(new BorderLayout(4, 4));
         mid.add(replaceRow, BorderLayout.NORTH);
         mid.add(filterBlock, BorderLayout.CENTER);
-        mid.add(foldRow, BorderLayout.SOUTH);
 
         JPanel fields = new JPanel(new BorderLayout(4, 4));
         fields.add(queryRow, BorderLayout.NORTH);
@@ -220,6 +247,10 @@ public final class SearchSidebar extends JPanel {
         this.onOpenMatch = onOpenMatch;
     }
 
+    public void setActiveFileSupplier(Supplier<ActiveFile> activeFile) {
+        this.activeFile = activeFile != null ? activeFile : () -> null;
+    }
+
     public String lastQuery() {
         return lastQuery;
     }
@@ -253,68 +284,119 @@ public final class SearchSidebar extends JPanel {
     }
 
     private String currentQuery() {
-        Object item = queryField.getEditor().getItem();
+        return comboText(queryField);
+    }
+
+    private static String comboText(JComboBox<String> combo) {
+        Object item = combo.getEditor().getItem();
         if (item == null) {
-            item = queryField.getSelectedItem();
+            item = combo.getSelectedItem();
         }
         return item == null ? "" : item.toString();
     }
 
     private void reloadHistoryModel() {
-        String current = currentQuery();
-        historyModel.removeAllElements();
-        for (String keyword : SearchHistory.all()) {
-            historyModel.addElement(keyword);
-        }
-        queryField.getEditor().setItem(current);
+        reloadComboHistory(queryField, historyModel, SearchHistory.Kind.QUERY);
     }
 
-    private void installHistoryPopup() {
+    private void reloadFilterHistoryModels() {
+        reloadComboHistory(includeField, includeHistoryModel, SearchHistory.Kind.INCLUDE);
+        reloadComboHistory(excludeField, excludeHistoryModel, SearchHistory.Kind.EXCLUDE);
+    }
+
+    private static void reloadComboHistory(
+            JComboBox<String> combo,
+            DefaultComboBoxModel<String> model,
+            SearchHistory.Kind kind
+    ) {
+        String current = comboText(combo);
+        model.removeAllElements();
+        for (String item : SearchHistory.all(kind)) {
+            model.addElement(item);
+        }
+        combo.getEditor().setItem(current);
+    }
+
+    private void installHistoryPopup(JComboBox<String> combo, SearchHistory.Kind kind, String clearLabel) {
         JPopupMenu menu = new JPopupMenu();
-        JMenuItem clear = new JMenuItem("検索履歴をクリア");
+        JMenuItem clear = new JMenuItem(clearLabel);
         clear.addActionListener(e -> {
-            SearchHistory.clear();
-            reloadHistoryModel();
-            summary.setText("検索履歴をクリアしました");
+            SearchHistory.clear(kind);
+            if (kind == SearchHistory.Kind.QUERY) {
+                reloadHistoryModel();
+            } else {
+                reloadFilterHistoryModels();
+            }
+            summary.setText(clearLabel.replace("をクリア", "をクリアしました"));
         });
         menu.add(clear);
-        queryField.setComponentPopupMenu(menu);
-        Component editor = queryField.getEditor().getEditorComponent();
+        combo.setComponentPopupMenu(menu);
+        Component editor = combo.getEditor().getEditorComponent();
         if (editor instanceof JTextComponent text) {
             text.setComponentPopupMenu(menu);
         }
     }
 
     private void runSearch() {
-        Path root = workspaceRoot.get();
         String query = currentQuery().trim();
-        if (root == null) {
-            summary.setText("フォルダを開いてください");
-            return;
-        }
         if (query.isEmpty()) {
             clearResults();
             summary.setText(" ");
             return;
         }
 
+        boolean onlyOpen = openFileOnly.isSelected();
+        ActiveFile open = onlyOpen ? activeFile.get() : null;
+        Path root = workspaceRoot.get();
+        if (onlyOpen) {
+            if (open == null || open.path() == null) {
+                clearResults();
+                summary.setText("開いているファイルがありません");
+                openInEditorBtn.setEnabled(false);
+                replaceAllBtn.setEnabled(false);
+                return;
+            }
+        } else if (root == null) {
+            summary.setText("フォルダを開いてください");
+            return;
+        }
+
+        String include = comboText(includeField).trim();
+        String exclude = comboText(excludeField).trim();
+
         SearchHistory.remember(query);
+        SearchHistory.remember(SearchHistory.Kind.INCLUDE, include);
+        SearchHistory.remember(SearchHistory.Kind.EXCLUDE, exclude);
         reloadHistoryModel();
+        reloadFilterHistoryModels();
         queryField.getEditor().setItem(query);
+        includeField.getEditor().setItem(include);
+        excludeField.getEditor().setItem(exclude);
 
         summary.setText("検索中…");
         clearResultsKeepingHistory();
         boolean mc = matchCase.isSelected();
         boolean ww = wholeWord.isSelected();
         boolean rx = regex.isSelected();
-        String include = includeField.getText();
-        String exclude = excludeField.getText();
+        final ActiveFile target = open;
+        final Path searchRoot = root;
 
         new SwingWorker<List<SearchFileGroup>, Void>() {
             @Override
             protected List<SearchFileGroup> doInBackground() throws Exception {
+                if (onlyOpen) {
+                    Path filterRoot = searchRoot != null
+                            ? searchRoot
+                            : (target.path().getParent() != null ? target.path().getParent() : target.path());
+                    FilePathFilter filter = FilePathFilter.parse(include, exclude);
+                    if (!filter.accept(filterRoot, target.path())) {
+                        return List.of();
+                    }
+                    return groupByFile(SearchService.findInText(
+                            target.text(), target.path(), query, mc, ww, rx));
+                }
                 return groupByFile(SearchService.findInWorkspace(
-                        root, query, mc, ww, rx, include, exclude));
+                        searchRoot, query, mc, ww, rx, include, exclude));
             }
 
             @Override
@@ -763,9 +845,10 @@ public final class SearchSidebar extends JPanel {
         return null;
     }
 
-    private void installFilterAutoSearch(JTextField field) {
+    private void installFilterAutoSearch(JComboBox<String> field) {
         field.addActionListener(e -> runSearch());
-        field.addFocusListener(new java.awt.event.FocusAdapter() {
+        Component editor = field.getEditor().getEditorComponent();
+        editor.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override
             public void focusLost(java.awt.event.FocusEvent e) {
                 if (!e.isTemporary()) {
@@ -775,7 +858,14 @@ public final class SearchSidebar extends JPanel {
         });
     }
 
-    private static JPanel labeledRow(JLabel label, JTextField field) {
+    private static void setComboPlaceholder(JComboBox<String> combo, String placeholder) {
+        Component editor = combo.getEditor().getEditorComponent();
+        if (editor instanceof JTextComponent text) {
+            text.putClientProperty("JTextField.placeholderText", placeholder);
+        }
+    }
+
+    private static JPanel labeledRow(JLabel label, JComponent field) {
         JPanel row = new JPanel(new BorderLayout(6, 0));
         row.add(label, BorderLayout.WEST);
         row.add(field, BorderLayout.CENTER);

@@ -255,6 +255,13 @@ public final class MainFrame extends JFrame {
         });
 
         fileTree.setOnOpenFile(this::openFile);
+        searchSidebar.setActiveFileSupplier(() -> {
+            CodeEditorPane editor = editors.getActiveEditor();
+            if (editor == null || editor.isVirtual()) {
+                return null;
+            }
+            return new SearchSidebar.ActiveFile(editor.getFile(), editor.getText());
+        });
         searchSidebar.setOnOpenMatch((path, match) -> {
             openFile(path);
             CodeEditorPane editor = editors.getActiveEditor();

@@ -7,46 +7,71 @@ import java.util.prefs.Preferences;
 import java.util.stream.Collectors;
 
 /**
- * Persists recent search keywords (java.util.prefs).
+ * Persists recent search / filter strings (java.util.prefs).
  */
 public final class SearchHistory {
+
+    public enum Kind {
+        QUERY("search.keywords"),
+        INCLUDE("search.include"),
+        EXCLUDE("search.exclude");
+
+        private final String key;
+
+        Kind(String key) {
+            this.key = key;
+        }
+    }
 
     private static final int MAX = 20;
     private static final String SEP = "\u001e";
     private static final Preferences PREFS = Preferences.userNodeForPackage(SearchHistory.class);
-    private static final String KEY = "search.keywords";
 
     private SearchHistory() {
     }
 
     public static void remember(String query) {
-        if (query == null) {
+        remember(Kind.QUERY, query);
+    }
+
+    public static List<String> all() {
+        return all(Kind.QUERY);
+    }
+
+    public static void clear() {
+        clear(Kind.QUERY);
+    }
+
+    public static void remember(Kind kind, String value) {
+        if (kind == null || value == null) {
             return;
         }
-        String trimmed = query.trim();
+        String trimmed = value.trim();
         if (trimmed.isEmpty()) {
             return;
         }
         LinkedHashSet<String> set = new LinkedHashSet<>();
         set.add(trimmed);
-        for (String item : load()) {
+        for (String item : load(kind)) {
             if (!item.equals(trimmed)) {
                 set.add(item);
             }
         }
-        save(set.stream().limit(MAX).collect(Collectors.toCollection(ArrayList::new)));
+        save(kind, set.stream().limit(MAX).collect(Collectors.toCollection(ArrayList::new)));
     }
 
-    public static List<String> all() {
-        return List.copyOf(load());
+    public static List<String> all(Kind kind) {
+        return List.copyOf(load(kind));
     }
 
-    public static void clear() {
-        PREFS.remove(KEY);
+    public static void clear(Kind kind) {
+        if (kind != null) {
+            PREFS.remove(kind.key);
+        }
     }
 
-    private static List<String> load() {
-        String raw = PREFS.get(KEY, "");
+    private static List<String> load(Kind kind) {
+        String raw = PREFS.get(kind.key, "");
         if (raw.isBlank()) {
             return new ArrayList<>();
         }
@@ -59,7 +84,7 @@ public final class SearchHistory {
         return list;
     }
 
-    private static void save(List<String> values) {
-        PREFS.put(KEY, String.join(SEP, values));
+    private static void save(Kind kind, List<String> values) {
+        PREFS.put(kind.key, String.join(SEP, values));
     }
 }
