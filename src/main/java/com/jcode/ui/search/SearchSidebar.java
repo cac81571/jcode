@@ -100,10 +100,6 @@ public final class SearchSidebar extends JPanel {
         wholeWord.setToolTipText("単語単位で一致");
         regex.setToolTipText("正規表現で検索");
         openFileOnly.setToolTipText("エディタで選択中のファイルだけを検索（未保存の内容も対象）。Include / Exclude も適用");
-        matchCase.addActionListener(e -> runSearch());
-        wholeWord.addActionListener(e -> runSearch());
-        regex.addActionListener(e -> runSearch());
-        openFileOnly.addActionListener(e -> runSearch());
         contextSpinner.setToolTipText("エディタ表示時の前後行数 (±N)。サイドバーには出ません");
         ((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField().setColumns(2);
 
@@ -165,13 +161,23 @@ public final class SearchSidebar extends JPanel {
         JPanel includeRow = labeledRow(includeLabel, includeField);
         JPanel excludeRow = labeledRow(excludeLabel, excludeField);
 
+        openInEditorBtn.setEnabled(false);
+        openInEditorBtn.setToolTipText("検索結果をコピー可能なテキストとしてエディタに開く（前後 N 行を反映）");
+        openInEditorBtn.addActionListener(e -> openResultsInEditor());
+
+        JPanel editorActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        editorActions.add(new JLabel("前後"));
+        editorActions.add(contextSpinner);
+        editorActions.add(new JLabel("行"));
+        editorActions.add(openInEditorBtn);
+
         JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         foldBtns.add(expandAllBtn);
         foldBtns.add(collapseAllBtn);
 
         JPanel scopeRow = new JPanel(new BorderLayout(4, 0));
         scopeRow.add(openFileOnly, BorderLayout.WEST);
-        scopeRow.add(foldBtns, BorderLayout.EAST);
+        scopeRow.add(editorActions, BorderLayout.EAST);
 
         JPanel filterBlock = new JPanel();
         filterBlock.setLayout(new BoxLayout(filterBlock, BoxLayout.Y_AXIS));
@@ -195,10 +201,6 @@ public final class SearchSidebar extends JPanel {
         JPanel north = new JPanel(new BorderLayout(4, 4));
         north.add(titleRow, BorderLayout.NORTH);
         north.add(fields, BorderLayout.CENTER);
-
-        openInEditorBtn.setEnabled(false);
-        openInEditorBtn.setToolTipText("検索結果をコピー可能なテキストとしてエディタに開く（前後 N 行を反映）");
-        openInEditorBtn.addActionListener(e -> openResultsInEditor());
 
         results.setRootVisible(false);
         results.setShowsRootHandles(true);
@@ -228,19 +230,16 @@ public final class SearchSidebar extends JPanel {
         // Enter in the editor, or choosing a history item
         queryField.addActionListener(e -> runSearch());
 
-        JPanel editorActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        editorActions.add(new JLabel("前後"));
-        editorActions.add(contextSpinner);
-        editorActions.add(new JLabel("行"));
-        editorActions.add(openInEditorBtn);
+        JPanel summaryRow = new JPanel(new BorderLayout(4, 0));
+        summaryRow.add(summary, BorderLayout.CENTER);
+        summaryRow.add(foldBtns, BorderLayout.EAST);
 
-        JPanel south = new JPanel(new BorderLayout(4, 0));
-        south.add(summary, BorderLayout.CENTER);
-        south.add(editorActions, BorderLayout.EAST);
+        JPanel resultsArea = new JPanel(new BorderLayout(0, 4));
+        resultsArea.add(summaryRow, BorderLayout.NORTH);
+        resultsArea.add(new JScrollPane(results), BorderLayout.CENTER);
 
         add(north, BorderLayout.NORTH);
-        add(new JScrollPane(results), BorderLayout.CENTER);
-        add(south, BorderLayout.SOUTH);
+        add(resultsArea, BorderLayout.CENTER);
     }
 
     public void setOnOpenMatch(BiConsumer<Path, SearchMatch> onOpenMatch) {
