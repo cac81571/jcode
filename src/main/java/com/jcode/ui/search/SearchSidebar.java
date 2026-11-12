@@ -90,6 +90,10 @@ public final class SearchSidebar extends JPanel {
 
     private List<SearchFileGroup> lastGroups = List.of();
     private String lastQuery = "";
+    /** Incremented on each search; stale SwingWorkers ignore their done(). */
+    private int searchGeneration;
+    /** Skip Include/Exclude auto-search while history models are updated. */
+    private boolean suppressFilterAutoSearch;
 
     public SearchSidebar(Supplier<Path> workspaceRoot) {
         super(new BorderLayout(0, 8));
@@ -363,15 +367,21 @@ public final class SearchSidebar extends JPanel {
         String include = comboText(includeField).trim();
         String exclude = comboText(excludeField).trim();
 
-        SearchHistory.remember(query);
-        SearchHistory.remember(SearchHistory.Kind.INCLUDE, include);
-        SearchHistory.remember(SearchHistory.Kind.EXCLUDE, exclude);
-        reloadHistoryModel();
-        reloadFilterHistoryModels();
-        queryField.getEditor().setItem(query);
-        includeField.getEditor().setItem(include);
-        excludeField.getEditor().setItem(exclude);
+        suppressFilterAutoSearch = true;
+        try {
+            SearchHistory.remember(query);
+            SearchHistory.remember(SearchHistory.Kind.INCLUDE, include);
+            SearchHistory.remember(SearchHistory.Kind.EXCLUDE, exclude);
+            reloadHistoryModel();
+            reloadFilterHistoryModels();
+            queryField.getEditor().setItem(query);
+            includeField.getEditor().setItem(include);
+            excludeField.getEditor().setItem(exclude);
+        } finally {
+            suppressFilterAutoSearch = false;
+        }
 
+        final int generation = ++searchGeneration;
         summary.setText("検索中…");
         clearResultsKeepingHistory();
         boolean mc = matchCase.isSelected();
@@ -400,6 +410,9 @@ public final class SearchSidebar extends JPanel {
 
             @Override
             protected void done() {
+                if (generation != searchGeneration) {
+                    return;
+                }
                 try {
                     List<SearchFileGroup> groups = get();
                     lastGroups = groups;
@@ -410,6 +423,9 @@ public final class SearchSidebar extends JPanel {
                     openInEditorBtn.setEnabled(!groups.isEmpty());
                     replaceAllBtn.setEnabled(!groups.isEmpty());
                 } catch (Exception ex) {
+                    if (generation != searchGeneration) {
+                        return;
+                    }
                     summary.setText("検索失敗: " + ex.getMessage());
                     openInEditorBtn.setEnabled(false);
                     replaceAllBtn.setEnabled(false);
@@ -845,12 +861,19 @@ public final class SearchSidebar extends JPanel {
     }
 
     private void installFilterAutoSearch(JComboBox<String> field) {
-        field.addActionListener(e -> runSearch());
+        // Enter in the editor only — avoid combo ActionEvent (fires on history reload / setItem)
         Component editor = field.getEditor().getEditorComponent();
+        if (editor instanceof JTextComponent text) {
+            text.addActionListener(e -> {
+                if (!suppressFilterAutoSearch) {
+                    runSearch();
+                }
+            });
+        }
         editor.addFocusListener(new java.awt.event.FocusAdapter() {
             @Override
             public void focusLost(java.awt.event.FocusEvent e) {
-                if (!e.isTemporary()) {
+                if (!e.isTemporary() && !suppressFilterAutoSearch) {
                     runSearch();
                 }
             }
