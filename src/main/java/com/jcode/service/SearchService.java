@@ -4,6 +4,11 @@ import com.jcode.model.ReplaceResult;
 import com.jcode.model.SearchMatch;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CharsetDecoder;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -29,8 +34,11 @@ public final class SearchService {
             "java", "kt", "xml", "md", "txt", "json", "yml", "yaml", "properties",
             "gradle", "kts", "html", "css", "js", "ts", "tsx", "jsx", "py", "go",
             "rs", "c", "h", "cpp", "hpp", "cs", "sql", "sh", "bat", "ps1", "gitignore",
-            "toml", "ini", "cfg", "svg", "fxml"
+            "toml", "ini", "cfg", "svg", "fxml", "csv", "tsv", "log"
     );
+
+    /** Prefer UTF-8; fall back for Japanese Windows CSVs (Shift_JIS / MS932). */
+    private static final List<Charset> READ_CHARSETS = buildReadCharsets();
 
     private SearchService() {
     }
@@ -114,8 +122,10 @@ public final class SearchService {
                     return FileVisitResult.CONTINUE;
                 }
                 try {
-                    String content = Files.readString(file, StandardCharsets.UTF_8);
-                    matches.addAll(findInText(content, file, pattern));
+                    String content = readText(file);
+                    if (content != null) {
+                        matches.addAll(findInText(content, file, pattern));
+                    }
                 } catch (IOException ignored) {
                     // binary / unreadable
                 }
@@ -166,7 +176,11 @@ public final class SearchService {
             if (!Files.isRegularFile(file)) {
                 continue;
             }
-            String original = Files.readString(file, StandardCharsets.UTF_8);
+            DecodedText decoded = readTextWithCharset(file);
+            if (decoded == null) {
+                continue;
+            }
+            String original = decoded.text();
             Matcher matcher = pattern.matcher(original);
             int count = 0;
             while (matcher.find()) {
@@ -177,12 +191,62 @@ public final class SearchService {
             }
             String updated = pattern.matcher(original).replaceAll(safeReplacement);
             if (!original.equals(updated)) {
-                Files.writeString(file, updated, StandardCharsets.UTF_8);
+                Files.writeString(file, updated, decoded.charset());
                 changed.add(file.toAbsolutePath().normalize());
                 totalReplacements += count;
             }
         }
         return new ReplaceResult(changed.size(), totalReplacements, List.copyOf(changed));
+    }
+
+    /** Read file as text, trying UTF-8 then common Japanese Windows encodings. */
+    public static String readText(Path file) throws IOException {
+        DecodedText decoded = readTextWithCharset(file);
+        return decoded == null ? null : decoded.text();
+    }
+
+    private static DecodedText readTextWithCharset(Path file) throws IOException {
+        byte[] bytes = Files.readAllBytes(file);
+        if (bytes.length >= 3
+                && (bytes[0] & 0xFF) == 0xEF
+                && (bytes[1] & 0xFF) == 0xBB
+                && (bytes[2] & 0xFF) == 0xBF) {
+            return new DecodedText(
+                    new String(bytes, 3, bytes.length - 3, StandardCharsets.UTF_8),
+                    StandardCharsets.UTF_8);
+        }
+        for (Charset charset : READ_CHARSETS) {
+            try {
+                CharsetDecoder decoder = charset.newDecoder()
+                        .onMalformedInput(CodingErrorAction.REPORT)
+                        .onUnmappableCharacter(CodingErrorAction.REPORT);
+                String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+                return new DecodedText(text, charset);
+            } catch (CharacterCodingException ignored) {
+                // try next charset
+            }
+        }
+        // Last resort: replace malformed bytes so search still works
+        return new DecodedText(new String(bytes, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+    }
+
+    private static List<Charset> buildReadCharsets() {
+        List<Charset> list = new ArrayList<>();
+        list.add(StandardCharsets.UTF_8);
+        for (String name : List.of("windows-31j", "Shift_JIS", "MS932", Charset.defaultCharset().name())) {
+            try {
+                Charset cs = Charset.forName(name);
+                if (!list.contains(cs)) {
+                    list.add(cs);
+                }
+            } catch (Exception ignored) {
+                // charset unavailable on this JVM
+            }
+        }
+        return List.copyOf(list);
+    }
+
+    private record DecodedText(String text, Charset charset) {
     }
 
     private static List<SearchMatch> findInText(String text, Path file, Pattern pattern) {

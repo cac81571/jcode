@@ -1,5 +1,6 @@
 package com.jcode.ui.editor;
 
+import com.jcode.service.SearchService;
 import com.jcode.ui.ThemeManager;
 import com.jcode.ui.UiFonts;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
@@ -36,7 +37,7 @@ public final class CodeEditorPane {
     private final List<Object> lineHighlights = new ArrayList<>();
 
     public CodeEditorPane(Path file) throws IOException {
-        this(file, null, Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "",
+        this(file, null, Files.exists(file) ? readFileText(file) : "",
                 detectSyntax(file), false);
     }
 
@@ -113,7 +114,7 @@ public final class CodeEditorPane {
         if (virtual) {
             return;
         }
-        String content = Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "";
+        String content = Files.exists(file) ? readFileText(file) : "";
         int caret = textArea.getCaretPosition();
         clearCustomHighlights();
         textArea.setText(content);
@@ -305,6 +306,11 @@ public final class CodeEditorPane {
             textArea.setBackground(new Color(255, 255, 255));
             textArea.setCurrentLineHighlightColor(new Color(240, 240, 240));
         }
+    }
+
+    private static String readFileText(Path file) throws IOException {
+        String text = SearchService.readText(file);
+        return text == null ? "" : text;
     }
 
     private static String detectSyntax(Path file) {

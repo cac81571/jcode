@@ -4,8 +4,6 @@ import com.jcode.model.SearchFileGroup;
 import com.jcode.model.SearchMatch;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,7 +50,11 @@ public final class SearchReportBuilder {
 
     private static void appendFileSection(StringBuilder out, SearchFileGroup group, int context)
             throws IOException {
-        List<String> lines = Files.readAllLines(group.file(), StandardCharsets.UTF_8);
+        String content = SearchService.readText(group.file());
+        if (content == null) {
+            content = "";
+        }
+        List<String> lines = List.of(content.split("\n", -1));
         Set<Integer> hitLines = group.matches().stream()
                 .map(SearchMatch::lineNumber)
                 .collect(Collectors.toCollection(TreeSet::new));
