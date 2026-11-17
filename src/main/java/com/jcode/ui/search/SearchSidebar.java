@@ -8,6 +8,7 @@ import com.jcode.service.SearchHistory;
 import com.jcode.service.SearchReportBuilder;
 import com.jcode.service.SearchService;
 import com.jcode.ui.ClipboardPaths;
+import com.jcode.ui.PathEllipsis;
 import com.jcode.ui.ThemeManager;
 
 import javax.swing.BorderFactory;

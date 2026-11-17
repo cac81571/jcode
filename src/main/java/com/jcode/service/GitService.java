@@ -305,6 +305,134 @@ public final class GitService implements Closeable {
         return "stash@{" + index + "}";
     }
 
+    /**
+     * Working-tree patch: {@code git diff --binary} (optionally limited to paths).
+     */
+    public byte[] createBinaryPatchWorktree(Collection<String> paths)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.add("diff");
+        cmd.add("--binary");
+        appendPathArgs(cmd, paths);
+        return runGitBytes(cmd);
+    }
+
+    /**
+     * Staged patch: {@code git diff --binary --cached}.
+     */
+    public byte[] createBinaryPatchStaged(Collection<String> paths)
+            throws IOException, InterruptedException {
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.add("diff");
+        cmd.add("--binary");
+        cmd.add("--cached");
+        appendPathArgs(cmd, paths);
+        return runGitBytes(cmd);
+    }
+
+    /**
+     * Commit patch: {@code git diff --binary <parent> <commit>} (or {@code --root} for root commits).
+     */
+    public byte[] createBinaryPatchForCommit(String commitId)
+            throws IOException, InterruptedException {
+        if (commitId == null || commitId.isBlank()) {
+            throw new IllegalArgumentException("commit id が空です");
+        }
+        ObjectId id = repository.resolve(commitId);
+        if (id == null) {
+            throw new IOException("コミットが見つかりません: " + commitId);
+        }
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.add("diff");
+        cmd.add("--binary");
+        try (RevWalk walk = new RevWalk(repository)) {
+            RevCommit commit = walk.parseCommit(id);
+            walk.parseHeaders(commit);
+            if (commit.getParentCount() == 0) {
+                cmd.add("--root");
+                cmd.add(commit.getName());
+            } else {
+                cmd.add(commit.getParent(0).getName());
+                cmd.add(commit.getName());
+            }
+        }
+        return runGitBytes(cmd);
+    }
+
+    /**
+     * Range patch: {@code git diff --binary <from>..<to>}
+     * ({@code from}/{@code to} may be commit id, branch, tag, or HEAD~n).
+     */
+    public byte[] createBinaryPatchRange(String fromRef, String toRef)
+            throws IOException, InterruptedException {
+        String from = fromRef == null ? "" : fromRef.trim();
+        String to = toRef == null ? "" : toRef.trim();
+        if (from.isEmpty() || to.isEmpty()) {
+            throw new IllegalArgumentException("開始と終了のコミットを指定してください");
+        }
+        if (repository.resolve(from) == null) {
+            throw new IOException("開始リビジョンが見つかりません: " + from);
+        }
+        if (repository.resolve(to) == null) {
+            throw new IOException("終了リビジョンが見つかりません: " + to);
+        }
+        List<String> cmd = new ArrayList<>();
+        cmd.add("git");
+        cmd.add("diff");
+        cmd.add("--binary");
+        cmd.add(from + ".." + to);
+        return runGitBytes(cmd);
+    }
+
+    /** Resolve a ref/commit-ish to a short id for file names, or null if unknown. */
+    public String shortIdOf(String rev) throws IOException {
+        if (rev == null || rev.isBlank()) {
+            return null;
+        }
+        ObjectId id = repository.resolve(rev.trim());
+        if (id == null) {
+            return null;
+        }
+        String name = id.getName();
+        return name.substring(0, Math.min(7, name.length()));
+    }
+
+    private static void appendPathArgs(List<String> cmd, Collection<String> paths) {
+        if (paths == null || paths.isEmpty()) {
+            return;
+        }
+        cmd.add("--");
+        for (String path : paths) {
+            if (path != null && !path.isBlank()) {
+                cmd.add(normalize(path));
+            }
+        }
+    }
+
+    private byte[] runGitBytes(List<String> command) throws IOException, InterruptedException {
+        ProcessBuilder pb = new ProcessBuilder(command);
+        pb.directory(workspaceRoot.toFile());
+        pb.redirectErrorStream(true);
+        Process process = pb.start();
+        byte[] output;
+        try (var in = process.getInputStream()) {
+            output = in.readAllBytes();
+        }
+        int code = process.waitFor();
+        // git diff returns 1 when differences exist; 0 when empty; >=2 is error
+        if (code >= 2) {
+            String message = new String(output, StandardCharsets.UTF_8).trim();
+            if (message.isEmpty()) {
+                message = "git 終了コード " + code;
+            }
+            throw new IOException(message);
+        }
+        return output;
+    }
+
     public String diff(String path, boolean staged) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (DiffFormatter formatter = new DiffFormatter(out)) {

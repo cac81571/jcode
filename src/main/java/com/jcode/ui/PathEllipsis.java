@@ -1,4 +1,4 @@
-package com.jcode.ui.search;
+package com.jcode.ui;
 
 /**
  * Ellipsis helpers for long paths.
@@ -33,7 +33,6 @@ public final class PathEllipsis {
         String tail = marker + fileName;
 
         if (tail.length() >= maxChars) {
-            // File name alone is long — keep end of name
             int keep = Math.max(1, maxChars - 1);
             return "…" + fileName.substring(Math.max(0, fileName.length() - keep));
         }

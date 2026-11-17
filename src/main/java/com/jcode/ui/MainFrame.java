@@ -247,6 +247,10 @@ public final class MainFrame extends JFrame {
         JMenu git = new JMenu("Git");
         git.add(item("更新", null, e -> gitPanel.refresh()));
         git.add(item("リポジトリを初期化", null, e -> initGit()));
+        git.addSeparator();
+        git.add(item("作業ツリーのパッチを作成…", null, e -> gitPanel.createBinaryPatchWorktree()));
+        git.add(item("ステージ済みのパッチを作成…", null, e -> gitPanel.createBinaryPatchStaged()));
+        git.add(item("コミット範囲のパッチを作成…", null, e -> gitPanel.createBinaryPatchRange()));
 
         bar.add(file);
         bar.add(edit);
@@ -313,8 +317,8 @@ public final class MainFrame extends JFrame {
         });
         gitPanel.setOnOpenFile(this::openFile);
         gitPanel.setOnShowDiff((texts, staged) -> {
+            // Path is already shown on GitPanel's own status line — avoid duplicating on statusBar
             editors.showGitDiff(texts, staged);
-            statusBar.setLeft((staged ? "Staged diff: " : "Diff: ") + texts.path());
         });
         gitPanel.setOnWorkingTreeChanged(path -> {
             editors.reloadFromDisk(java.util.List.of(path));

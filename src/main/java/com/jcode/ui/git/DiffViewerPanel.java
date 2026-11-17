@@ -5,7 +5,7 @@ import com.github.difflib.text.DiffRowGenerator;
 import com.jcode.model.DiffTexts;
 import com.jcode.ui.ThemeManager;
 import com.jcode.ui.UiFonts;
-import com.jcode.ui.search.PathEllipsis;
+import com.jcode.ui.PathEllipsis;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.RTextScrollPane;

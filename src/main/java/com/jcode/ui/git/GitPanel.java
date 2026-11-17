@@ -4,12 +4,13 @@ import com.jcode.model.DiffTexts;
 import com.jcode.model.GitChange;
 import com.jcode.service.GitService;
 import com.jcode.ui.WrapLayout;
-import com.jcode.ui.search.PathEllipsis;
+import com.jcode.ui.PathEllipsis;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
 import javax.swing.DefaultListModel;
 import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JList;
 import javax.swing.JMenuItem;
@@ -19,15 +20,21 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextField;
+import javax.swing.SwingConstants;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingUtilities;
 import javax.swing.SwingWorker;
+import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -80,6 +87,24 @@ public final class GitPanel extends JPanel {
             stashPanel.clearSelection();
             filesPanel.showCommit(entry.id());
         });
+        logPanel.setOnCreatePatch(entry -> createBinaryPatchForCommit(entry.id(), entry.shortId()));
+        logPanel.setOnCreateRangePatch((older, newer) -> {
+            if (newer == null) {
+                return;
+            }
+            if (older == null) {
+                String from = newer.parentIds() != null && !newer.parentIds().isEmpty()
+                        ? newer.parentIds().getFirst().substring(0, 7)
+                        : "";
+                createBinaryPatchRange(from, newer.shortId());
+                return;
+            }
+            // 2 commits selected: older..newer without re-prompting for refs
+            createBinaryPatchRangeDirect(older.id(), newer.id(),
+                    "range-" + older.shortId() + "-" + newer.shortId() + ".patch");
+        });
+        installPatchPopup(stagedList, true);
+        installPatchPopup(changesList, false);
         filesPanel.setOnShowDiff(texts -> onShowDiff.accept(texts, false));
         filesPanel.setOnStatus(msg -> statusLabel.setText(msg));
         stashPanel.setOnStatus(msg -> statusLabel.setText(msg));
@@ -563,6 +588,320 @@ public final class GitPanel extends JPanel {
                 }
             }
         });
+    }
+
+    private void installPatchPopup(JList<GitChange> list, boolean staged) {
+        list.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                maybePopup(e);
+            }
+
+            @Override
+            public void mouseReleased(MouseEvent e) {
+                maybePopup(e);
+            }
+
+            private void maybePopup(MouseEvent e) {
+                if (!e.isPopupTrigger() || git == null) {
+                    return;
+                }
+                int index = list.locationToIndex(e.getPoint());
+                if (index >= 0 && !list.isSelectedIndex(index)) {
+                    list.setSelectedIndex(index);
+                }
+                JPopupMenu menu = new JPopupMenu();
+                JMenuItem selected = new JMenuItem("選択ファイルのパッチを作成…");
+                JMenuItem all = new JMenuItem(staged
+                        ? "ステージ済み全体のパッチを作成…"
+                        : "作業ツリー全体のパッチを作成…");
+                selected.addActionListener(ev -> {
+                    List<String> paths = selectedPaths(list);
+                    if (paths.isEmpty()) {
+                        statusLabel.setText("ファイルを選択してください");
+                        return;
+                    }
+                    createBinaryPatch(staged, paths, defaultPatchName(staged ? "staged" : "worktree"));
+                });
+                all.addActionListener(ev -> {
+                    if (staged) {
+                        createBinaryPatchStaged();
+                    } else {
+                        createBinaryPatchWorktree();
+                    }
+                });
+                menu.add(selected);
+                menu.add(all);
+                menu.show(list, e.getX(), e.getY());
+            }
+        });
+    }
+
+    /** {@code git diff --binary} for the working tree. */
+    public void createBinaryPatchWorktree() {
+        createBinaryPatch(false, List.of(), defaultPatchName("worktree"));
+    }
+
+    /** {@code git diff --binary --cached} for the index. */
+    public void createBinaryPatchStaged() {
+        createBinaryPatch(true, List.of(), defaultPatchName("staged"));
+    }
+
+    public void createBinaryPatchForCommit(String commitId, String shortId) {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        String suggest = "commit-" + (shortId == null || shortId.isBlank()
+                ? "patch"
+                : shortId) + ".patch";
+        Path out = choosePatchFile(suggest);
+        if (out == null) {
+            return;
+        }
+        statusLabel.setText("パッチ作成中…");
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() throws Exception {
+                byte[] bytes = git.createBinaryPatchForCommit(commitId);
+                if (bytes.length == 0) {
+                    throw new IllegalStateException("差分が空です");
+                }
+                Files.write(out, bytes);
+                return out;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    statusLabel.setText("パッチ作成: " + saved.getFileName());
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    statusLabel.setText("パッチ作成失敗");
+                    JOptionPane.showMessageDialog(GitPanel.this, cause.getMessage(),
+                            "パッチ作成", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    /** Dialog for {@code git diff --binary <from>..<to>}. */
+    public void createBinaryPatchRange() {
+        createBinaryPatchRange("", "HEAD");
+    }
+
+    /** Save {@code git diff --binary <from>..<to>} after choosing a file (no ref dialog). */
+    public void createBinaryPatchRangeDirect(String fromRef, String toRef, String suggestName) {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        String from = fromRef == null ? "" : fromRef.trim();
+        String to = toRef == null ? "" : toRef.trim();
+        if (from.isEmpty() || to.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "開始と終了を両方指定してください。",
+                    "パッチ作成", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        Path out = choosePatchFile(suggestName != null ? suggestName : defaultPatchName("range"));
+        if (out == null) {
+            return;
+        }
+        statusLabel.setText("パッチ作成中…");
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() throws Exception {
+                byte[] bytes = git.createBinaryPatchRange(from, to);
+                if (bytes.length == 0) {
+                    throw new IllegalStateException("差分が空です");
+                }
+                Files.write(out, bytes);
+                return out;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    statusLabel.setText("パッチ作成: " + saved.getFileName()
+                            + " (" + from + ".." + to + ")");
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    statusLabel.setText("パッチ作成失敗");
+                    JOptionPane.showMessageDialog(GitPanel.this, cause.getMessage(),
+                            "パッチ作成", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    public void createBinaryPatchRange(String defaultFrom, String defaultTo) {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        JTextField fromField = new JTextField(defaultFrom == null ? "" : defaultFrom, 28);
+        JTextField toField = new JTextField(defaultTo == null ? "" : defaultTo, 28);
+        fromField.putClientProperty("JTextField.placeholderText", "例: abc1234, main, HEAD~5");
+        toField.putClientProperty("JTextField.placeholderText", "例: HEAD, def5678");
+
+        JPanel form = new JPanel(new BorderLayout(8, 8));
+        JPanel labels = new JPanel(new BorderLayout(0, 8));
+        JLabel fromLabel = new JLabel("開始 (from)");
+        JLabel toLabel = new JLabel("終了 (to)");
+        fromLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        toLabel.setHorizontalAlignment(SwingConstants.LEFT);
+        labels.add(fromLabel, BorderLayout.NORTH);
+        labels.add(toLabel, BorderLayout.SOUTH);
+        JPanel fields = new JPanel(new BorderLayout(0, 8));
+        fields.add(fromField, BorderLayout.NORTH);
+        fields.add(toField, BorderLayout.SOUTH);
+        form.add(labels, BorderLayout.WEST);
+        form.add(fields, BorderLayout.CENTER);
+        form.add(new JLabel("git diff --binary <開始>..<終了>"), BorderLayout.SOUTH);
+
+        int ok = JOptionPane.showConfirmDialog(
+                this,
+                form,
+                "コミット範囲のパッチ作成",
+                JOptionPane.OK_CANCEL_OPTION,
+                JOptionPane.PLAIN_MESSAGE
+        );
+        if (ok != JOptionPane.OK_OPTION) {
+            return;
+        }
+        String from = fromField.getText().trim();
+        String to = toField.getText().trim();
+        if (from.isEmpty() || to.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "開始と終了を両方指定してください。",
+                    "パッチ作成", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+
+        String suggest;
+        try {
+            String a = git.shortIdOf(from);
+            String b = git.shortIdOf(to);
+            suggest = "range-" + (a != null ? a : "from") + "-" + (b != null ? b : "to") + ".patch";
+        } catch (Exception ignored) {
+            suggest = defaultPatchName("range");
+        }
+        Path out = choosePatchFile(suggest);
+        if (out == null) {
+            return;
+        }
+        statusLabel.setText("パッチ作成中…");
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() throws Exception {
+                byte[] bytes = git.createBinaryPatchRange(from, to);
+                if (bytes.length == 0) {
+                    throw new IllegalStateException("差分が空です");
+                }
+                Files.write(out, bytes);
+                return out;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    statusLabel.setText("パッチ作成: " + saved.getFileName()
+                            + " (" + from + ".." + to + ")");
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    statusLabel.setText("パッチ作成失敗");
+                    JOptionPane.showMessageDialog(GitPanel.this, cause.getMessage(),
+                            "パッチ作成", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private void createBinaryPatch(boolean staged, List<String> paths, String suggestName) {
+        if (git == null) {
+            statusLabel.setText("リポジトリがありません");
+            return;
+        }
+        Path out = choosePatchFile(suggestName);
+        if (out == null) {
+            return;
+        }
+        statusLabel.setText("パッチ作成中…");
+        List<String> pathCopy = List.copyOf(paths);
+        new SwingWorker<Path, Void>() {
+            @Override
+            protected Path doInBackground() throws Exception {
+                byte[] bytes = staged
+                        ? git.createBinaryPatchStaged(pathCopy)
+                        : git.createBinaryPatchWorktree(pathCopy);
+                if (bytes.length == 0) {
+                    throw new IllegalStateException("差分が空です");
+                }
+                Files.write(out, bytes);
+                return out;
+            }
+
+            @Override
+            protected void done() {
+                try {
+                    Path saved = get();
+                    statusLabel.setText("パッチ作成: " + saved.getFileName());
+                } catch (Exception ex) {
+                    Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+                    statusLabel.setText("パッチ作成失敗");
+                    JOptionPane.showMessageDialog(GitPanel.this, cause.getMessage(),
+                            "パッチ作成", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
+    }
+
+    private Path choosePatchFile(String suggestName) {
+        JFileChooser chooser = new JFileChooser();
+        if (git != null) {
+            chooser.setCurrentDirectory(git.workspaceRoot().toFile());
+        }
+        chooser.setSelectedFile(new java.io.File(suggestName));
+        chooser.setDialogTitle("パッチファイルの保存");
+        chooser.setFileFilter(new FileNameExtensionFilter("Patch (*.patch, *.diff)", "patch", "diff"));
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return null;
+        }
+        Path out = chooser.getSelectedFile().toPath();
+        String name = out.getFileName().toString();
+        if (!name.contains(".")) {
+            out = out.resolveSibling(name + ".patch");
+        }
+        if (Files.exists(out)) {
+            int overwrite = JOptionPane.showConfirmDialog(
+                    this,
+                    out.getFileName() + " は既に存在します。上書きしますか？",
+                    "パッチ作成",
+                    JOptionPane.YES_NO_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (overwrite != JOptionPane.YES_OPTION) {
+                return null;
+            }
+        }
+        return out;
+    }
+
+    private static String defaultPatchName(String kind) {
+        String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+        return kind + "-" + stamp + ".patch";
+    }
+
+    private static List<String> selectedPaths(JList<GitChange> list) {
+        List<String> paths = new ArrayList<>();
+        for (GitChange change : list.getSelectedValuesList()) {
+            if (change != null) {
+                paths.add(change.path());
+            }
+        }
+        return paths;
     }
 
     private void showDiff(GitChange change, boolean staged) {

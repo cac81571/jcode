@@ -3,7 +3,7 @@ package com.jcode.ui.git;
 import com.jcode.model.DiffTexts;
 import com.jcode.model.GitChange;
 import com.jcode.service.GitService;
-import com.jcode.ui.search.PathEllipsis;
+import com.jcode.ui.PathEllipsis;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
