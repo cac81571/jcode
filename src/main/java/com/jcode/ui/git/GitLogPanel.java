@@ -277,10 +277,12 @@ public final class GitLogPanel extends JPanel {
     }
 
     private static final class CommitRenderer extends JPanel implements ListCellRenderer<GitCommitEntry> {
+        private final JLabel graph = new JLabel();
         private final JLabel title = new JLabel();
         private final JLabel authorPad = new JLabel();
         private final JLabel author = new JLabel();
         private final JLabel time = new JLabel();
+        private final JPanel titleRow = new JPanel(new BorderLayout(0, 0));
         private final JPanel meta = new JPanel(new BorderLayout(8, 0));
         private final JPanel authorRow = new JPanel(new BorderLayout(0, 0));
 
@@ -290,11 +292,17 @@ public final class GitLogPanel extends JPanel {
             setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 18));
 
             Font ui = UiFonts.ui(13f);
+            // Mono keeps lane columns aligned; message/meta use UI font
+            graph.setFont(UiFonts.mono(13f));
             title.setFont(ui);
-            authorPad.setFont(ui);
+            authorPad.setFont(UiFonts.mono(13f));
             author.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setHorizontalAlignment(SwingConstants.RIGHT);
+
+            titleRow.setOpaque(false);
+            titleRow.add(graph, BorderLayout.WEST);
+            titleRow.add(title, BorderLayout.CENTER);
 
             authorPad.setOpaque(false);
             authorRow.setOpaque(false);
@@ -305,7 +313,7 @@ public final class GitLogPanel extends JPanel {
             meta.add(authorRow, BorderLayout.CENTER);
             meta.add(time, BorderLayout.EAST);
 
-            add(title, BorderLayout.NORTH);
+            add(titleRow, BorderLayout.NORTH);
             add(meta, BorderLayout.SOUTH);
         }
 
@@ -315,16 +323,17 @@ public final class GitLogPanel extends JPanel {
                 boolean isSelected, boolean cellHasFocus
         ) {
             if (entry == null) {
+                graph.setText("");
                 title.setText("");
                 authorPad.setText("");
                 author.setText("");
                 time.setText("");
             } else {
-                String graph = entry.parentIds().size() > 1 ? "*─┐ " : "*── ";
-                title.setText(graph + entry.shortMessage());
-                // Pad so author lines up under the commit message start
+                String g = entry.graphOrEmpty();
+                graph.setText(g);
+                title.setText(entry.shortMessage());
                 authorPad.setText("");
-                int pad = title.getFontMetrics(title.getFont()).stringWidth(graph);
+                int pad = graph.getFontMetrics(graph.getFont()).stringWidth(g);
                 authorPad.setPreferredSize(new Dimension(pad, 1));
                 authorPad.setMinimumSize(new Dimension(pad, 1));
                 author.setText(entry.author() == null ? "" : entry.author());
@@ -339,7 +348,6 @@ public final class GitLogPanel extends JPanel {
                     }
                     right.append(refs);
                 }
-                // Prefer HEAD/branches on the right; hide timestamp when any label exists
                 if (!right.isEmpty()) {
                     time.setText(right.toString());
                 } else {
@@ -361,6 +369,7 @@ public final class GitLogPanel extends JPanel {
                 fg = isSelected ? Color.WHITE : new Color(30, 30, 30);
             }
             setBackground(bg);
+            graph.setForeground(fg);
             title.setForeground(fg);
             Color muted = isSelected ? fg : new Color(
                     (fg.getRed() * 2 + 120) / 3,
@@ -375,7 +384,7 @@ public final class GitLogPanel extends JPanel {
             if (width <= 0 && list.getParent() != null) {
                 width = list.getParent().getWidth();
             }
-            setPreferredSize(new Dimension(Math.max(120, width), 32));
+            setPreferredSize(new Dimension(Math.max(120, width), 38));
             return this;
         }
     }

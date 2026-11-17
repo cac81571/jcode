@@ -13,12 +13,17 @@ import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.dircache.DirCache;
 import org.eclipse.jgit.dircache.DirCacheEntry;
 import org.eclipse.jgit.dircache.DirCacheIterator;
+import org.eclipse.jgit.lib.Constants;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
 import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revplot.PlotCommit;
+import org.eclipse.jgit.revplot.PlotCommitList;
+import org.eclipse.jgit.revplot.PlotLane;
+import org.eclipse.jgit.revplot.PlotWalk;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
@@ -40,10 +45,13 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Thin JGit facade (same engine used by EGit).
@@ -494,38 +502,99 @@ public final class GitService implements Closeable {
     }
 
     /**
-     * Commit history for the current branch (newest first), with HEAD / ref labels.
+     * Commit history across local branches (newest first), with lane graph + HEAD / ref labels.
      */
-    public List<GitCommitEntry> listLog(int limit) throws IOException, GitAPIException {
+    public List<GitCommitEntry> listLog(int limit) throws IOException {
         Map<String, List<String>> refsByCommit = collectRefsByCommit();
-        ObjectId headId = repository.resolve("HEAD");
+        ObjectId headId = repository.resolve(Constants.HEAD);
         String headName = headId != null ? headId.getName() : null;
+        int max = Math.max(1, limit);
 
         List<GitCommitEntry> entries = new ArrayList<>();
-        Iterable<RevCommit> commits = git.log().setMaxCount(Math.max(1, limit)).call();
-        for (RevCommit commit : commits) {
-            List<String> parents = new ArrayList<>(commit.getParentCount());
-            for (int i = 0; i < commit.getParentCount(); i++) {
-                parents.add(commit.getParent(i).getName());
+        try (PlotWalk walk = new PlotWalk(repository)) {
+            Set<ObjectId> starts = new HashSet<>();
+            for (Ref ref : repository.getRefDatabase().getRefsByPrefix(Constants.R_HEADS)) {
+                ObjectId id = ref.getObjectId();
+                if (id != null) {
+                    starts.add(id);
+                }
             }
-            PersonIdent author = commit.getAuthorIdent();
-            String authorName = author != null ? author.getName() : "";
-            Instant when = Instant.ofEpochSecond(commit.getCommitTime());
-            boolean isHead = headName != null && headName.equals(commit.getName());
-            List<String> refs = refsByCommit.getOrDefault(commit.getName(), List.of());
-            entries.add(new GitCommitEntry(
-                    commit.getName(),
-                    commit.getName().substring(0, 7),
-                    commit.getShortMessage(),
-                    commit.getFullMessage(),
-                    authorName,
-                    when,
-                    List.copyOf(parents),
-                    isHead,
-                    refs
-            ));
+            if (headId != null) {
+                starts.add(headId);
+            }
+            if (starts.isEmpty()) {
+                return entries;
+            }
+            for (ObjectId id : starts) {
+                walk.markStart(walk.parseCommit(id));
+            }
+
+            PlotCommitList<PlotLane> plotList = new PlotCommitList<>();
+            plotList.source(walk);
+            plotList.fillTo(max);
+
+            for (int i = 0; i < plotList.size(); i++) {
+                PlotCommit<PlotLane> commit = plotList.get(i);
+                List<String> parents = new ArrayList<>(commit.getParentCount());
+                for (int p = 0; p < commit.getParentCount(); p++) {
+                    parents.add(commit.getParent(p).getName());
+                }
+                PersonIdent author = commit.getAuthorIdent();
+                String authorName = author != null ? author.getName() : "";
+                Instant when = Instant.ofEpochSecond(commit.getCommitTime());
+                boolean isHead = headName != null && headName.equals(commit.getName());
+                List<String> refs = refsByCommit.getOrDefault(commit.getName(), List.of());
+                String graph = buildGraphPrefix(plotList, commit);
+                entries.add(new GitCommitEntry(
+                        commit.getName(),
+                        commit.getName().substring(0, 7),
+                        commit.getShortMessage(),
+                        commit.getFullMessage(),
+                        authorName,
+                        when,
+                        List.copyOf(parents),
+                        isHead,
+                        refs,
+                        graph
+                ));
+            }
         }
         return entries;
+    }
+
+    /** Build a compact lane graph for one plot commit, e.g. {@code │ ● │ }. */
+    private static String buildGraphPrefix(
+            PlotCommitList<PlotLane> plotList,
+            PlotCommit<PlotLane> commit
+    ) {
+        Collection<PlotLane> passing = new ArrayList<>();
+        plotList.findPassingThrough(commit, passing);
+        Set<Integer> passingPos = new HashSet<>();
+        int max = 0;
+        for (PlotLane lane : passing) {
+            if (lane == null) {
+                continue;
+            }
+            int pos = lane.getPosition();
+            passingPos.add(pos);
+            max = Math.max(max, pos);
+        }
+        PlotLane own = commit.getLane();
+        int commitPos = own != null ? own.getPosition() : 0;
+        max = Math.max(max, commitPos);
+
+        StringBuilder sb = new StringBuilder();
+        for (int pos = 0; pos <= max; pos++) {
+            if (pos == commitPos) {
+                sb.append(commit.getParentCount() > 1 ? '◆' : '●');
+            } else if (passingPos.contains(pos)) {
+                sb.append('│');
+            } else {
+                sb.append(' ');
+            }
+            sb.append(' ');
+        }
+        return sb.toString();
     }
 
     public enum ResetMode {
