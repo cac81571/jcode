@@ -6,6 +6,7 @@ import com.jcode.service.RecentItems;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.ui.editor.CodeEditorPane;
 import com.jcode.ui.editor.EditorTabManager;
+import com.jcode.ui.explorer.FileHistoryPanel;
 import com.jcode.ui.explorer.FileTreePanel;
 import com.jcode.ui.explorer.QuickOpenDialog;
 import com.jcode.ui.git.GitPanel;
@@ -46,9 +47,12 @@ public final class MainFrame extends JFrame {
     private final EditorTabManager editors = new EditorTabManager();
     private final SearchSidebar searchSidebar = new SearchSidebar(this::getWorkspaceRoot);
     private final GitPanel gitPanel = new GitPanel();
+    private final FileHistoryPanel fileHistoryPanel = new FileHistoryPanel();
     private final FindReplaceBar findReplaceBar = new FindReplaceBar(editors::getActiveEditor);
     private final StatusBar statusBar = new StatusBar();
     private final JTabbedPane activityBar = new JTabbedPane(JTabbedPane.TOP);
+    private JSplitPane editorSplit;
+    private boolean fileHistoryVisible;
 
     /** Default activity-bar width; Git uses 3/5 of the window (1:1:1:2 with editor). */
     private static final int SIDEBAR_WIDTH = 420;
@@ -133,7 +137,15 @@ public final class MainFrame extends JFrame {
         editorArea.add(findReplaceBar, BorderLayout.NORTH);
         editorArea.add(editors.getComponent(), BorderLayout.CENTER);
 
-        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorArea);
+        fileHistoryPanel.setOnShowDiff(texts -> editors.showGitDiff(texts, false));
+        fileHistoryPanel.setOnClose(this::hideFileHistoryPanel);
+
+        editorSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, editorArea, null);
+        editorSplit.setResizeWeight(1.0);
+        editorSplit.setDividerSize(0);
+        editorSplit.setContinuousLayout(true);
+
+        mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorSplit);
         mainSplit.setResizeWeight(0.28);
         mainSplit.setDividerLocation(SIDEBAR_WIDTH);
 
@@ -272,6 +284,7 @@ public final class MainFrame extends JFrame {
         });
 
         fileTree.setOnOpenFile(this::openFile);
+        fileTree.setOnShowFileHistory(this::showFileHistory);
         searchSidebar.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor == null || editor.isVirtual()) {
@@ -341,6 +354,7 @@ public final class MainFrame extends JFrame {
             statusBar.setRight(rel.replace('\\', '/'));
             if (!editor.isVirtual()) {
                 fileTree.reveal(file);
+                syncFileHistoryWithEditor(file);
             }
         });
     }
@@ -382,6 +396,76 @@ public final class MainFrame extends JFrame {
         } catch (IOException ex) {
             JOptionPane.showMessageDialog(this, "Cannot open file:\n" + ex.getMessage(),
                     "Open", JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private void showFileHistory(Path path) {
+        if (path == null || !Files.isRegularFile(path)) {
+            return;
+        }
+        if (gitService == null || !gitService.isRepository()) {
+            JOptionPane.showMessageDialog(this,
+                    "Git リポジトリがありません。",
+                    "変更履歴",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        if (gitService.toRepoRelativePath(path) == null) {
+            JOptionPane.showMessageDialog(this,
+                    "このファイルはリポジトリ外です。",
+                    "変更履歴",
+                    JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        showFileHistoryPanel(path);
+    }
+
+    private void showFileHistoryPanel(Path path) {
+        fileHistoryPanel.showFile(gitService, path, true);
+        if (!fileHistoryVisible) {
+            editorSplit.setRightComponent(fileHistoryPanel);
+            editorSplit.setDividerSize(6);
+            fileHistoryVisible = true;
+        }
+        javax.swing.SwingUtilities.invokeLater(this::balanceFileHistorySplit);
+    }
+
+    /** While the history panel is open, follow the active editor file (list only, no auto-diff). */
+    private void syncFileHistoryWithEditor(Path path) {
+        if (!fileHistoryVisible || path == null || !Files.isRegularFile(path)) {
+            return;
+        }
+        if (gitService == null || !gitService.isRepository()) {
+            fileHistoryPanel.showUnavailable(path, "Git リポジトリがありません");
+            return;
+        }
+        if (gitService.toRepoRelativePath(path) == null) {
+            fileHistoryPanel.showUnavailable(path, "リポジトリ外のファイル");
+            return;
+        }
+        fileHistoryPanel.showFile(gitService, path, false);
+    }
+
+    private void balanceFileHistorySplit() {
+        if (!fileHistoryVisible || editorSplit == null) {
+            return;
+        }
+        int total = editorSplit.getWidth();
+        if (total <= 0) {
+            javax.swing.SwingUtilities.invokeLater(this::balanceFileHistorySplit);
+            return;
+        }
+        int historyWidth = Math.min(360, Math.max(260, total / 4));
+        editorSplit.setDividerLocation(total - historyWidth);
+    }
+
+    private void hideFileHistoryPanel() {
+        fileHistoryVisible = false;
+        fileHistoryPanel.clear();
+        if (editorSplit != null) {
+            editorSplit.setRightComponent(null);
+            editorSplit.setDividerSize(0);
+            editorSplit.setDividerLocation(1.0);
         }
     }
 
@@ -568,6 +652,7 @@ public final class MainFrame extends JFrame {
     }
 
     private void reconnectGit() {
+        hideFileHistoryPanel();
         gitPanel.clear();
         if (workspaceRoot == null) {
             return;

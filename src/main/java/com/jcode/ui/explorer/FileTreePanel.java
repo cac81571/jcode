@@ -43,6 +43,8 @@ public final class FileTreePanel extends JPanel {
     private Path pendingReveal;
     private Consumer<Path> onOpenFile = p -> {
     };
+    private Consumer<Path> onShowFileHistory = p -> {
+    };
 
     public FileTreePanel() {
         super(new BorderLayout());
@@ -127,6 +129,9 @@ public final class FileTreePanel extends JPanel {
             JMenuItem sakura = new JMenuItem("サクラエディタで開く");
             sakura.addActionListener(e -> openInSakura(selected));
             menu.add(sakura);
+            JMenuItem history = new JMenuItem("変更履歴…");
+            history.addActionListener(e -> onShowFileHistory.accept(selected));
+            menu.add(history);
         }
 
         if (isDir && selection != null) {
@@ -209,6 +214,11 @@ public final class FileTreePanel extends JPanel {
 
     public void setOnOpenFile(Consumer<Path> onOpenFile) {
         this.onOpenFile = onOpenFile;
+    }
+
+    public void setOnShowFileHistory(Consumer<Path> onShowFileHistory) {
+        this.onShowFileHistory = onShowFileHistory != null ? onShowFileHistory : p -> {
+        };
     }
 
     public void setRoot(Path root) {

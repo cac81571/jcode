@@ -647,6 +647,70 @@ public final class GitService implements Closeable {
     }
 
     /**
+     * Commits that touched {@code file} (newest first). {@code file} may be absolute or
+     * workspace-relative.
+     */
+    public List<GitCommitEntry> listFileLog(Path file, int limit) throws IOException, GitAPIException {
+        String repoPath = toRepoRelativePath(file);
+        if (repoPath == null) {
+            return List.of();
+        }
+        int max = Math.max(1, limit);
+        List<GitCommitEntry> entries = new ArrayList<>();
+        for (RevCommit commit : git.log().addPath(repoPath).setMaxCount(max).call()) {
+            List<String> parents = new ArrayList<>(commit.getParentCount());
+            for (int p = 0; p < commit.getParentCount(); p++) {
+                parents.add(commit.getParent(p).getName());
+            }
+            PersonIdent author = commit.getAuthorIdent();
+            String authorName = author != null ? author.getName() : "";
+            Instant when = Instant.ofEpochSecond(commit.getCommitTime());
+            entries.add(new GitCommitEntry(
+                    commit.getName(),
+                    commit.getName().substring(0, 7),
+                    commit.getShortMessage(),
+                    commit.getFullMessage(),
+                    authorName,
+                    when,
+                    List.copyOf(parents),
+                    false,
+                    List.of(),
+                    List.of(),
+                    0,
+                    ""
+            ));
+        }
+        return entries;
+    }
+
+    /**
+     * Diff for {@code file} at {@code commitId} vs its first parent (repo-relative path resolved).
+     */
+    public DiffTexts loadFileCommitDiff(Path file, String commitId) throws IOException {
+        String repoPath = toRepoRelativePath(file);
+        if (repoPath == null) {
+            return new DiffTexts(file != null ? file.toString() : "", "", "");
+        }
+        return loadCommitDiffTexts(commitId, repoPath);
+    }
+
+    /** Workspace / absolute path → path relative to the Git work tree, or null if outside. */
+    public String toRepoRelativePath(Path file) {
+        if (file == null) {
+            return null;
+        }
+        Path absolute = file.isAbsolute()
+                ? file.toAbsolutePath().normalize()
+                : workspaceRoot.resolve(file).toAbsolutePath().normalize();
+        Path workTree = repository.getWorkTree().toPath().toAbsolutePath().normalize();
+        if (!absolute.startsWith(workTree)) {
+            return null;
+        }
+        String relative = workTree.relativize(absolute).toString().replace('\\', '/');
+        return relative.isEmpty() ? null : relative;
+    }
+
+    /**
      * Commit history across local branches (newest first), with lane graph + HEAD / ref labels.
      */
     public List<GitCommitEntry> listLog(int limit) throws IOException {
