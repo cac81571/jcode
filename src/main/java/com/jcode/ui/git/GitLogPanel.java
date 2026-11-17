@@ -17,6 +17,7 @@ import javax.swing.JPopupMenu;
 import javax.swing.JScrollPane;
 import javax.swing.ListCellRenderer;
 import javax.swing.ListSelectionModel;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingConstants;
 import javax.swing.SwingWorker;
 import javax.swing.UIManager;
@@ -32,10 +33,14 @@ import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.font.TextAttribute;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 
@@ -49,8 +54,14 @@ public final class GitLogPanel extends JPanel {
             DateTimeFormatter.ofPattern("yy/MM/dd HH:mm").withZone(ZoneId.systemDefault());
 
     private final DefaultListModel<GitCommitEntry> model = new DefaultListModel<>();
-    private final JList<GitCommitEntry> list = new JList<>(model);
+    private final JList<GitCommitEntry> list = new JList<>(model) {
+        @Override
+        public boolean getScrollableTracksViewportWidth() {
+            return true;
+        }
+    };
     private final JLabel status = new JLabel(" ");
+    private final CommitRenderer renderer = new CommitRenderer();
 
     private GitService git;
     private Runnable onReset = () -> {
@@ -72,7 +83,7 @@ public final class GitLogPanel extends JPanel {
 
         list.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
         list.setFont(UiFonts.ui(13f));
-        list.setCellRenderer(new CommitRenderer());
+        list.setCellRenderer(renderer);
         list.setFixedCellHeight(38);
         list.setToolTipText("Ctrl+クリックで2件選択 → 右クリックで範囲パッチ");
         list.addListSelectionListener(e -> {
@@ -133,8 +144,10 @@ public final class GitLogPanel extends JPanel {
         header.add(new JLabel("HISTORY"), BorderLayout.WEST);
         header.add(status, BorderLayout.EAST);
 
+        JScrollPane scroll = new JScrollPane(list);
+        scroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         add(header, BorderLayout.NORTH);
-        add(new JScrollPane(list), BorderLayout.CENTER);
+        add(scroll, BorderLayout.CENTER);
     }
 
     public void setOnReset(Runnable onReset) {
@@ -170,7 +183,6 @@ public final class GitLogPanel extends JPanel {
 
     public void bind(GitService git) {
         this.git = git;
-        refresh();
     }
 
     public void clear() {
@@ -198,9 +210,10 @@ public final class GitLogPanel extends JPanel {
             protected void done() {
                 try {
                     List<GitCommitEntry> entries = get();
+                    renderer.clearDisplayCache();
                     model.clear();
-                    for (GitCommitEntry entry : entries) {
-                        model.addElement(entry);
+                    if (!entries.isEmpty()) {
+                        model.addAll(entries);
                     }
                     status.setText(entries.size() + " commits");
                     if (!entries.isEmpty()) {
@@ -432,6 +445,11 @@ public final class GitLogPanel extends JPanel {
         private final JPanel titleText = new JPanel(new BorderLayout(6, 0));
         private final JPanel meta = new JPanel(new BorderLayout(8, 0));
         private final JPanel authorRow = new JPanel(new BorderLayout(0, 0));
+        private final FontMetrics graphMetrics;
+        private final IdentityHashMap<GitCommitEntry, String> graphHtmlCache = new IdentityHashMap<>();
+        private final IdentityHashMap<GitCommitEntry, String> refsHtmlCache = new IdentityHashMap<>();
+        private final IdentityHashMap<GitCommitEntry, Integer> authorPadCache = new IdentityHashMap<>();
+        private Boolean cachedDark;
 
         CommitRenderer() {
             setLayout(new BorderLayout(0, 0));
@@ -439,11 +457,15 @@ public final class GitLogPanel extends JPanel {
             setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 18));
 
             Font ui = UiFonts.ui(13f);
+            Font mono = UiFonts.mono(11f);
+            graphMetrics = getFontMetrics(mono);
             // Mono keeps lane columns aligned; slightly smaller than message
-            graph.setFont(UiFonts.mono(11f));
-            hash.setFont(ui);
+            graph.setFont(mono);
+            Map<TextAttribute, Object> linkAttrs = new HashMap<>(ui.getAttributes());
+            linkAttrs.put(TextAttribute.UNDERLINE, TextAttribute.UNDERLINE_ON);
+            hash.setFont(ui.deriveFont(linkAttrs));
             title.setFont(ui);
-            authorPad.setFont(UiFonts.mono(11f));
+            authorPad.setFont(mono);
             author.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -469,11 +491,24 @@ public final class GitLogPanel extends JPanel {
             add(meta, BorderLayout.SOUTH);
         }
 
+        void clearDisplayCache() {
+            graphHtmlCache.clear();
+            refsHtmlCache.clear();
+            authorPadCache.clear();
+            cachedDark = null;
+        }
+
         @Override
         public Component getListCellRendererComponent(
                 JList<? extends GitCommitEntry> list, GitCommitEntry entry, int index,
                 boolean isSelected, boolean cellHasFocus
         ) {
+            boolean dark = ThemeManager.isDark();
+            if (cachedDark == null || cachedDark != dark) {
+                clearDisplayCache();
+                cachedDark = dark;
+            }
+
             if (entry == null) {
                 graph.setText("");
                 hash.setText("");
@@ -482,18 +517,31 @@ public final class GitLogPanel extends JPanel {
                 author.setText("");
                 time.setText("");
             } else {
-                String plainGraph = entry.graphPlain();
-                graph.setText(coloredGraphHtml(entry.graphCellsOrEmpty(), isSelected));
-                hash.setText("<html><nobr><u>" + escapeHtml(entry.shortId()) + "</u></nobr></html>");
-                hash.setToolTipText("クリックでコピー: " + entry.shortId());
+                // Selected: plain text (no HTML parse). Unselected: cached HTML colors.
+                if (isSelected) {
+                    graph.setText(entry.graphPlain());
+                } else {
+                    graph.setText(graphHtmlCache.computeIfAbsent(
+                            entry, e -> coloredGraphHtml(e.graphCellsOrEmpty())));
+                }
+                hash.setText(entry.shortId());
                 title.setText(entry.shortMessage());
                 authorPad.setText("");
-                int pad = graph.getFontMetrics(UiFonts.mono(11f)).stringWidth(plainGraph);
+                int pad = authorPadCache.computeIfAbsent(
+                        entry, e -> graphMetrics.stringWidth(e.graphPlain()));
                 authorPad.setPreferredSize(new Dimension(pad, 1));
                 authorPad.setMinimumSize(new Dimension(pad, 1));
                 author.setText(entry.author() == null ? "" : entry.author());
-                time.setText(rightLabelHtml(entry, isSelected));
-                setToolTipText(entry.id() + "\n" + entry.fullMessage());
+
+                boolean hasRefs = (entry.refs() != null && !entry.refs().isEmpty()) || entry.head();
+                if (!hasRefs) {
+                    time.setText(TIME_FMT.format(entry.when()));
+                } else if (isSelected) {
+                    time.setText(plainRefs(entry));
+                } else {
+                    time.setText(refsHtmlCache.computeIfAbsent(entry, CommitRenderer::rightLabelHtml));
+                }
+                setToolTipText(entry.shortId() + " — " + entry.shortMessage());
             }
 
             Color bg = isSelected
@@ -510,14 +558,14 @@ public final class GitLogPanel extends JPanel {
             }
             setBackground(bg);
             title.setForeground(fg);
+            graph.setForeground(fg);
             hash.setForeground(isSelected ? fg : linkColor());
             Color metaGray = metaGrayColor(isSelected, fg);
             author.setForeground(metaGray);
-            // Date-only labels use label foreground; branch HTML carries its own colors
             boolean hasRefs = entry != null
                     && ((entry.refs() != null && !entry.refs().isEmpty()) || entry.head());
-            if (!hasRefs) {
-                time.setForeground(metaGray);
+            if (!hasRefs || isSelected) {
+                time.setForeground(hasRefs ? fg : metaGray);
             }
             authorPad.setForeground(bg);
 
@@ -525,11 +573,24 @@ public final class GitLogPanel extends JPanel {
             if (width <= 0 && list.getParent() != null) {
                 width = list.getParent().getWidth();
             }
-            setPreferredSize(new Dimension(Math.max(120, width), 38));
+            if (width > 0) {
+                setPreferredSize(new Dimension(width, 38));
+            }
             return this;
         }
 
-        private static String coloredGraphHtml(List<CommitGraphCell> cells, boolean selected) {
+        private static String plainRefs(GitCommitEntry entry) {
+            List<String> labels = new ArrayList<>();
+            if (entry.head()) {
+                labels.add("HEAD");
+            }
+            if (entry.refs() != null) {
+                labels.addAll(entry.refs());
+            }
+            return String.join(", ", labels);
+        }
+
+        private static String coloredGraphHtml(List<CommitGraphCell> cells) {
             if (cells.isEmpty()) {
                 return "";
             }
@@ -540,12 +601,7 @@ public final class GitLogPanel extends JPanel {
                     html.append("&nbsp;&nbsp;");
                     continue;
                 }
-                Color color = selected
-                        ? UIManager.getColor("List.selectionForeground")
-                        : BranchColors.forLane(cell.lane());
-                if (color == null) {
-                    color = BranchColors.forLane(cell.lane());
-                }
+                Color color = BranchColors.forLane(cell.lane());
                 html.append("<font color='").append(BranchColors.html(color)).append("'>")
                         .append(cell.symbol())
                         .append("</font>&nbsp;");
@@ -554,7 +610,7 @@ public final class GitLogPanel extends JPanel {
             return html.toString();
         }
 
-        private static String rightLabelHtml(GitCommitEntry entry, boolean selected) {
+        private static String rightLabelHtml(GitCommitEntry entry) {
             List<String> labels = new ArrayList<>();
             if (entry.head()) {
                 labels.add("HEAD");
@@ -562,24 +618,15 @@ public final class GitLogPanel extends JPanel {
             if (entry.refs() != null) {
                 labels.addAll(entry.refs());
             }
-            if (labels.isEmpty()) {
-                // Plain text; color applied via time.setForeground (light gray)
-                return TIME_FMT.format(entry.when());
-            }
             StringBuilder html = new StringBuilder("<html><nobr>");
             for (int i = 0; i < labels.size(); i++) {
                 if (i > 0) {
                     html.append("<font color='#888888'>, </font>");
                 }
                 String label = labels.get(i);
-                if (selected) {
-                    html.append("<b>").append(escapeHtml(label)).append("</b>");
-                    continue;
-                }
                 Color color = "HEAD".equals(label)
                         ? BranchColors.forLane(entry.commitLane())
                         : BranchColors.forBranch(label);
-                // Prefer lane color when label is the only branch tip on this commit
                 if (labels.size() == 1 || (labels.size() == 2 && entry.head() && i == 1)) {
                     color = BranchColors.forLane(entry.commitLane());
                 }

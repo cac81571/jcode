@@ -50,10 +50,10 @@ public final class MainFrame extends JFrame {
     private final StatusBar statusBar = new StatusBar();
     private final JTabbedPane activityBar = new JTabbedPane(JTabbedPane.TOP);
 
-    /** Default activity-bar width; Git uses half the window (1:1:1:3 with editor). */
+    /** Default activity-bar width; Git uses 3/5 of the window (1:1:1:2 with editor). */
     private static final int SIDEBAR_WIDTH = 420;
-    /** Git columns + editor = 1+1+1+3 → left pane is half the frame. */
-    private static final double GIT_SIDEBAR_RATIO = 0.5;
+    /** Git columns + editor = 1+1+1+2 → left pane is 3/5 of the frame. */
+    private static final double GIT_SIDEBAR_RATIO = 0.6;
 
     private Path workspaceRoot;
     private GitService gitService;

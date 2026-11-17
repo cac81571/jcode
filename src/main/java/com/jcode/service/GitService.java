@@ -523,11 +523,18 @@ public final class GitService implements Closeable {
         return new DiffTexts(normalized, oldText, newText);
     }
 
+    private String cachedDiffCommitId;
+    private List<DiffEntry> cachedDiffEntries;
+
     private List<DiffEntry> diffEntriesForCommit(String commitId) throws IOException {
+        if (commitId != null && commitId.equals(cachedDiffCommitId) && cachedDiffEntries != null) {
+            return cachedDiffEntries;
+        }
         ObjectId id = repository.resolve(commitId);
         if (id == null) {
             return List.of();
         }
+        List<DiffEntry> entries;
         try (RevWalk walk = new RevWalk(repository);
              DiffFormatter formatter = new DiffFormatter(DisabledOutputStream.INSTANCE)) {
             formatter.setRepository(repository);
@@ -541,8 +548,17 @@ public final class GitService implements Closeable {
             try (ObjectReader reader = repository.newObjectReader()) {
                 newTree.reset(reader, commit.getTree());
             }
-            return formatter.scan(oldTree, newTree);
+            entries = List.copyOf(formatter.scan(oldTree, newTree));
         }
+        cachedDiffCommitId = commitId;
+        cachedDiffEntries = entries;
+        return entries;
+    }
+
+    /** Drop cached commit diffs (after mutations that may change history views). */
+    public void invalidateDiffCache() {
+        cachedDiffCommitId = null;
+        cachedDiffEntries = null;
     }
 
     private AbstractTreeIterator treeIterator(RevWalk walk, ObjectId commitId) throws IOException {
@@ -674,6 +690,7 @@ public final class GitService implements Closeable {
                 boolean isHead = headName != null && headName.equals(commit.getName());
                 List<String> refs = refsByCommit.getOrDefault(commit.getName(), List.of());
                 GraphBuild graph = buildGraph(plotList, commit);
+                List<CommitGraphCell> cells = graph.cells();
                 entries.add(new GitCommitEntry(
                         commit.getName(),
                         commit.getName().substring(0, 7),
@@ -684,12 +701,24 @@ public final class GitService implements Closeable {
                         List.copyOf(parents),
                         isHead,
                         refs,
-                        graph.cells(),
-                        graph.commitLane()
+                        cells,
+                        graph.commitLane(),
+                        buildGraphPlain(cells)
                 ));
             }
         }
         return entries;
+    }
+
+    private static String buildGraphPlain(List<CommitGraphCell> cells) {
+        if (cells == null || cells.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder(cells.size() * 2);
+        for (CommitGraphCell cell : cells) {
+            sb.append(cell.symbol()).append(' ');
+        }
+        return sb.toString();
     }
 
     private record GraphBuild(List<CommitGraphCell> cells, int commitLane) {
@@ -823,6 +852,7 @@ public final class GitService implements Closeable {
 
     @Override
     public void close() {
+        invalidateDiffCache();
         git.close();
         repository.close();
     }

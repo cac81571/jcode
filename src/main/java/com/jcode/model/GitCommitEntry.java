@@ -17,8 +17,13 @@ public record GitCommitEntry(
         boolean head,
         List<String> refs,
         List<CommitGraphCell> graphCells,
-        int commitLane
+        int commitLane,
+        String graphPlain
 ) {
+    public GitCommitEntry {
+        graphPlain = graphPlain == null ? "" : graphPlain;
+    }
+
     public String displayRefs() {
         if (refs == null || refs.isEmpty()) {
             return "";
@@ -28,16 +33,5 @@ public record GitCommitEntry(
 
     public List<CommitGraphCell> graphCellsOrEmpty() {
         return graphCells == null ? List.of() : graphCells;
-    }
-
-    public String graphPlain() {
-        if (graphCells == null || graphCells.isEmpty()) {
-            return "";
-        }
-        StringBuilder sb = new StringBuilder();
-        for (CommitGraphCell cell : graphCells) {
-            sb.append(cell.symbol()).append(' ');
-        }
-        return sb.toString();
     }
 }

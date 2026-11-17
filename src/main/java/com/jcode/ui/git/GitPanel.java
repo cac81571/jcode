@@ -226,7 +226,7 @@ public final class GitPanel extends JPanel {
 
     /**
      * Balance CHANGES | HISTORY | FILES to 1:1:1
-     * (with the editor at 3× via MainFrame main split → overall 1:1:1:3).
+     * (with the editor at 2× via MainFrame main split → overall 1:1:1:2).
      */
     public void balanceColumns() {
         if (bodySplit == null || historyFilesSplit == null) {
@@ -908,13 +908,30 @@ public final class GitPanel extends JPanel {
         if (git == null || change == null) {
             return;
         }
-        try {
-            DiffTexts texts = git.loadDiffTexts(change.path(), staged);
-            onShowDiff.accept(texts, staged);
-            statusLabel.setText((staged ? "Staged" : "Changes") + ": " + change.path());
-        } catch (Exception ex) {
-            statusLabel.setText("Diff error: " + ex.getMessage());
-        }
+        GitService service = git;
+        String path = change.path();
+        boolean wantStaged = staged;
+        statusLabel.setText("Diff 読込中… " + path);
+        new SwingWorker<DiffTexts, Void>() {
+            @Override
+            protected DiffTexts doInBackground() throws Exception {
+                return service.loadDiffTexts(path, wantStaged);
+            }
+
+            @Override
+            protected void done() {
+                if (git != service) {
+                    return;
+                }
+                try {
+                    DiffTexts texts = get();
+                    onShowDiff.accept(texts, wantStaged);
+                    statusLabel.setText((wantStaged ? "Staged" : "Changes") + ": " + path);
+                } catch (Exception ex) {
+                    statusLabel.setText("Diff error: " + ex.getMessage());
+                }
+            }
+        }.execute();
     }
 
     private void showError(Exception ex) {

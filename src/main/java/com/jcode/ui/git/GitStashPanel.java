@@ -133,7 +133,6 @@ public final class GitStashPanel extends JPanel {
 
     public void bind(GitService git) {
         this.git = git;
-        refresh();
     }
 
     public void clear() {

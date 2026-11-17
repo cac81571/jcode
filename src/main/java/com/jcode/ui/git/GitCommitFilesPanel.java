@@ -20,6 +20,7 @@ import java.awt.Component;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 
 /**
@@ -30,6 +31,7 @@ public final class GitCommitFilesPanel extends JPanel {
     private final DefaultListModel<GitChange> model = new DefaultListModel<>();
     private final JList<GitChange> list = new JList<>(model);
     private final JLabel status = new JLabel(" ");
+    private final AtomicInteger loadGeneration = new AtomicInteger();
 
     private GitService git;
     private String selectedCommitId;
@@ -60,7 +62,7 @@ public final class GitCommitFilesPanel extends JPanel {
         });
         list.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                showSelectedDiff();
+                showSelectedDiffAsync();
             }
         });
         list.addMouseListener(new MouseAdapter() {
@@ -68,9 +70,9 @@ public final class GitCommitFilesPanel extends JPanel {
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() >= 1 && !e.isPopupTrigger()) {
                     int index = list.locationToIndex(e.getPoint());
-                    if (index >= 0) {
-                        list.setSelectedIndex(index);
-                        showSelectedDiff();
+                    if (index >= 0 && list.getSelectedIndex() == index) {
+                        // Re-click same row: selection listener may not fire
+                        showSelectedDiffAsync();
                     }
                 }
             }
@@ -103,12 +105,14 @@ public final class GitCommitFilesPanel extends JPanel {
     }
 
     public void clearFiles() {
+        loadGeneration.incrementAndGet();
         selectedCommitId = null;
         model.clear();
         status.setText(" ");
     }
 
     public void showCommit(String commitId) {
+        loadGeneration.incrementAndGet();
         model.clear();
         selectedCommitId = null;
         if (git == null || commitId == null || commitId.isBlank()) {
@@ -118,6 +122,7 @@ public final class GitCommitFilesPanel extends JPanel {
         selectedCommitId = commitId;
         status.setText("…");
         String id = commitId;
+        int gen = loadGeneration.get();
         new SwingWorker<List<GitChange>, Void>() {
             @Override
             protected List<GitChange> doInBackground() throws Exception {
@@ -126,7 +131,7 @@ public final class GitCommitFilesPanel extends JPanel {
 
             @Override
             protected void done() {
-                if (!id.equals(selectedCommitId)) {
+                if (gen != loadGeneration.get() || !id.equals(selectedCommitId)) {
                     return;
                 }
                 try {
@@ -136,10 +141,7 @@ public final class GitCommitFilesPanel extends JPanel {
                         model.addElement(change);
                     }
                     status.setText(changes.size() + " files");
-                    if (!changes.isEmpty()) {
-                        list.setSelectedIndex(0);
-                        showSelectedDiff();
-                    }
+                    // Do not auto-open the first file's diff — that blocks the EDT on large blobs.
                 } catch (Exception ex) {
                     status.setText("失敗");
                     onStatus.accept("Commit files: " + ex.getMessage());
@@ -148,18 +150,36 @@ public final class GitCommitFilesPanel extends JPanel {
         }.execute();
     }
 
-    private void showSelectedDiff() {
+    private void showSelectedDiffAsync() {
         GitChange change = list.getSelectedValue();
         if (change == null || git == null || selectedCommitId == null) {
             return;
         }
-        try {
-            DiffTexts texts = git.loadCommitDiffTexts(selectedCommitId, change.path());
-            onShowDiff.accept(texts);
-            onStatus.accept("Diff: " + change.path());
-        } catch (Exception ex) {
-            onStatus.accept("Diff error: " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Diff", JOptionPane.ERROR_MESSAGE);
-        }
+        String commitId = selectedCommitId;
+        String path = change.path();
+        int gen = loadGeneration.get();
+        onStatus.accept("Diff 読込中… " + path);
+        new SwingWorker<DiffTexts, Void>() {
+            @Override
+            protected DiffTexts doInBackground() throws Exception {
+                return git.loadCommitDiffTexts(commitId, path);
+            }
+
+            @Override
+            protected void done() {
+                if (gen != loadGeneration.get() || !commitId.equals(selectedCommitId)) {
+                    return;
+                }
+                try {
+                    DiffTexts texts = get();
+                    onShowDiff.accept(texts);
+                    onStatus.accept("Diff: " + path);
+                } catch (Exception ex) {
+                    onStatus.accept("Diff error: " + ex.getMessage());
+                    JOptionPane.showMessageDialog(
+                            GitCommitFilesPanel.this, ex.getMessage(), "Diff", JOptionPane.ERROR_MESSAGE);
+                }
+            }
+        }.execute();
     }
 }
