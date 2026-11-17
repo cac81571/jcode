@@ -50,19 +50,21 @@ public final class GitLogPanel extends JPanel {
     };
     private Consumer<GitCommitEntry> onCommitSelected = e -> {
     };
+    private boolean suppressSelectionEvent;
 
     public GitLogPanel() {
         super(new BorderLayout(0, 4));
         setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
 
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        list.setFont(UiFonts.mono(12f));
+        list.setFont(UiFonts.ui(13f));
         list.setCellRenderer(new CommitRenderer());
-        list.setFixedCellHeight(32);
+        list.setFixedCellHeight(38);
         list.addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                onCommitSelected.accept(list.getSelectedValue());
+            if (e.getValueIsAdjusting() || suppressSelectionEvent) {
+                return;
             }
+            onCommitSelected.accept(list.getSelectedValue());
         });
 
         list.addMouseListener(new MouseAdapter() {
@@ -107,6 +109,15 @@ public final class GitLogPanel extends JPanel {
 
     public void setOnCommitSelected(Consumer<GitCommitEntry> onCommitSelected) {
         this.onCommitSelected = onCommitSelected;
+    }
+
+    public void clearSelection() {
+        suppressSelectionEvent = true;
+        try {
+            list.clearSelection();
+        } finally {
+            suppressSelectionEvent = false;
+        }
     }
 
     public void bind(GitService git) {
@@ -276,13 +287,13 @@ public final class GitLogPanel extends JPanel {
         CommitRenderer() {
             setLayout(new BorderLayout(0, 0));
             setOpaque(true);
-            setBorder(BorderFactory.createEmptyBorder(1, 4, 1, 18));
+            setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 18));
 
-            Font mono = UiFonts.mono(12f);
-            title.setFont(mono);
-            authorPad.setFont(mono);
-            author.setFont(UiFonts.ui(11f).deriveFont(Font.PLAIN));
-            time.setFont(UiFonts.ui(11f).deriveFont(Font.PLAIN));
+            Font ui = UiFonts.ui(13f);
+            title.setFont(ui);
+            authorPad.setFont(ui);
+            author.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
+            time.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setHorizontalAlignment(SwingConstants.RIGHT);
 
             authorPad.setOpaque(false);

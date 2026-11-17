@@ -40,6 +40,9 @@ public final class GitStashPanel extends JPanel {
     };
     private Consumer<String> onStatus = s -> {
     };
+    private Consumer<GitStashEntry> onStashSelected = e -> {
+    };
+    private boolean suppressSelectionEvent;
 
     public GitStashPanel() {
         super(new BorderLayout(0, 2));
@@ -57,6 +60,12 @@ public final class GitStashPanel extends JPanel {
                 }
                 return this;
             }
+        });
+        list.addListSelectionListener(e -> {
+            if (e.getValueIsAdjusting() || suppressSelectionEvent) {
+                return;
+            }
+            onStashSelected.accept(list.getSelectedValue());
         });
         list.addMouseListener(new MouseAdapter() {
             @Override
@@ -106,6 +115,20 @@ public final class GitStashPanel extends JPanel {
 
     public void setOnStatus(Consumer<String> onStatus) {
         this.onStatus = onStatus;
+    }
+
+    public void setOnStashSelected(Consumer<GitStashEntry> onStashSelected) {
+        this.onStashSelected = onStashSelected != null ? onStashSelected : e -> {
+        };
+    }
+
+    public void clearSelection() {
+        suppressSelectionEvent = true;
+        try {
+            list.clearSelection();
+        } finally {
+            suppressSelectionEvent = false;
+        }
     }
 
     public void bind(GitService git) {

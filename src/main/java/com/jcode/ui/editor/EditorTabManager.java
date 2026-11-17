@@ -438,14 +438,14 @@ public final class EditorTabManager {
         TabHeader(String title, Runnable onClose) {
             super(new FlowLayout(FlowLayout.LEFT, 4, 0));
             setOpaque(false);
+            titleLabel.setText(title);
+            titleLabel.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 2));
+            add(titleLabel);
+
             JButton close = new CloseTabButton();
             close.setToolTipText("閉じる");
             close.addActionListener(e -> onClose.run());
             add(close);
-
-            titleLabel.setText(title);
-            titleLabel.setBorder(BorderFactory.createEmptyBorder(0, 2, 0, 0));
-            add(titleLabel);
         }
 
         void setTitle(String title) {

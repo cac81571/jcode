@@ -3,6 +3,7 @@ package com.jcode.ui.git;
 import com.jcode.model.DiffTexts;
 import com.jcode.model.GitChange;
 import com.jcode.service.GitService;
+import com.jcode.ui.search.PathEllipsis;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
@@ -49,7 +50,9 @@ public final class GitCommitFilesPanel extends JPanel {
             ) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 if (value instanceof GitChange change) {
-                    setText(change.statusLabel() + "  " + change.path());
+                    String prefix = change.statusLabel() + "  ";
+                    int max = Math.max(24, list.getWidth() / 8 - prefix.length());
+                    setText(prefix + PathEllipsis.middle(change.path(), max));
                     setToolTipText(change.path());
                 }
                 return this;
@@ -153,10 +156,10 @@ public final class GitCommitFilesPanel extends JPanel {
         try {
             DiffTexts texts = git.loadCommitDiffTexts(selectedCommitId, change.path());
             onShowDiff.accept(texts);
-            onStatus.accept("Commit diff: " + change.path());
+            onStatus.accept("Diff: " + change.path());
         } catch (Exception ex) {
             onStatus.accept("Diff error: " + ex.getMessage());
-            JOptionPane.showMessageDialog(this, ex.getMessage(), "Commit Diff", JOptionPane.ERROR_MESSAGE);
+            JOptionPane.showMessageDialog(this, ex.getMessage(), "Diff", JOptionPane.ERROR_MESSAGE);
         }
     }
 }

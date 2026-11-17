@@ -5,6 +5,7 @@ import com.github.difflib.text.DiffRowGenerator;
 import com.jcode.model.DiffTexts;
 import com.jcode.ui.ThemeManager;
 import com.jcode.ui.UiFonts;
+import com.jcode.ui.search.PathEllipsis;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 import org.fife.ui.rtextarea.RTextScrollPane;
@@ -140,7 +141,9 @@ public final class DiffViewerPanel extends JPanel {
             clear();
             return;
         }
-        title.setText(texts.path());
+        String path = texts.path();
+        title.setText(PathEllipsis.middle(path, 64));
+        title.setToolTipText(path);
         if (mode == Mode.SIDE_BY_SIDE) {
             renderSideBySide(texts);
         } else {

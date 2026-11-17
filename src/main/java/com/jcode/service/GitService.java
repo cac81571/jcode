@@ -267,9 +267,10 @@ public final class GitService implements Closeable {
         List<GitStashEntry> entries = new ArrayList<>();
         int index = 0;
         for (RevCommit commit : git.stashList().call()) {
-            String shortId = commit.getName().substring(0, 7);
+            String id = commit.getName();
+            String shortId = id.substring(0, 7);
             String msg = commit.getShortMessage();
-            entries.add(new GitStashEntry(index, "stash@{" + index + "}", shortId, msg));
+            entries.add(new GitStashEntry(index, "stash@{" + index + "}", id, shortId, msg));
             index++;
         }
         return entries;

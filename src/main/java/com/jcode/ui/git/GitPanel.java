@@ -4,6 +4,7 @@ import com.jcode.model.DiffTexts;
 import com.jcode.model.GitChange;
 import com.jcode.service.GitService;
 import com.jcode.ui.WrapLayout;
+import com.jcode.ui.search.PathEllipsis;
 
 import javax.swing.BorderFactory;
 import javax.swing.DefaultListCellRenderer;
@@ -56,6 +57,7 @@ public final class GitPanel extends JPanel {
     private final GitStashPanel stashPanel = new GitStashPanel();
     private final GitCommitFilesPanel filesPanel = new GitCommitFilesPanel();
     private JSplitPane bodySplit;
+    private JSplitPane historyFilesSplit;
     private Runnable onRepositoryReset = () -> {
     };
 
@@ -73,14 +75,22 @@ public final class GitPanel extends JPanel {
         });
         logPanel.setOnCommitSelected(entry -> {
             if (entry == null) {
-                filesPanel.clearFiles();
-            } else {
-                filesPanel.showCommit(entry.id());
+                return;
             }
+            stashPanel.clearSelection();
+            filesPanel.showCommit(entry.id());
         });
         filesPanel.setOnShowDiff(texts -> onShowDiff.accept(texts, false));
         filesPanel.setOnStatus(msg -> statusLabel.setText(msg));
         stashPanel.setOnStatus(msg -> statusLabel.setText(msg));
+        stashPanel.setOnStashSelected(entry -> {
+            if (entry == null) {
+                return;
+            }
+            logPanel.clearSelection();
+            filesPanel.showCommit(entry.id());
+            statusLabel.setText("Stash: " + entry.ref());
+        });
         stashPanel.setOnChanged(() -> {
             refreshChangesOnly();
             onRepositoryReset.run();
@@ -161,36 +171,40 @@ public final class GitPanel extends JPanel {
         changesAndStash.setResizeWeight(0.78);
         changesAndStash.setContinuousLayout(true);
 
-        JSplitPane leftColumn = new JSplitPane(JSplitPane.VERTICAL_SPLIT, changesAndStash, logPanel);
-        leftColumn.setResizeWeight(0.6);
-        leftColumn.setContinuousLayout(true);
-
         JPanel commitBar = new JPanel(new BorderLayout(4, 4));
         commitBar.add(commitMessage, BorderLayout.CENTER);
         commitBar.add(commit, BorderLayout.EAST);
         commitMessage.putClientProperty("JTextField.placeholderText", "Message (Ctrl+Enter to commit)");
 
-        // Left: branch → commit → STAGED/CHANGES/STASH/HISTORY
+        // Left: branch → commit → STAGED/CHANGES/STASH
         JPanel leftNorth = new JPanel(new BorderLayout(0, 8));
         leftNorth.add(header, BorderLayout.NORTH);
         leftNorth.add(commitBar, BorderLayout.SOUTH);
 
         JPanel leftStack = new JPanel(new BorderLayout(0, 8));
         leftStack.add(leftNorth, BorderLayout.NORTH);
-        leftStack.add(leftColumn, BorderLayout.CENTER);
+        leftStack.add(changesAndStash, BorderLayout.CENTER);
 
-        // FILES spans full height (aligned with branch row at top); ~equal width with left column
-        bodySplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftStack, filesPanel);
-        bodySplit.setResizeWeight(0.5);
+        // HISTORY | FILES as independent full-height columns (equal share of remaining 2/3)
+        historyFilesSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, logPanel, filesPanel);
+        historyFilesSplit.setResizeWeight(0.5);
+        historyFilesSplit.setContinuousLayout(true);
+
+        // CHANGES | (HISTORY+FILES) → overall CHANGES:HISTORY:FILES = 1:1:1
+        bodySplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, leftStack, historyFilesSplit);
+        bodySplit.setResizeWeight(1.0 / 3.0);
         bodySplit.setContinuousLayout(true);
 
         add(bodySplit, BorderLayout.CENTER);
         add(statusLabel, BorderLayout.SOUTH);
     }
 
-    /** Split left column and FILES roughly 50/50 (call after the Git tab is shown). */
+    /**
+     * Balance CHANGES | HISTORY | FILES to 1:1:1
+     * (with the editor at 3× via MainFrame main split → overall 1:1:1:3).
+     */
     public void balanceColumns() {
-        if (bodySplit == null) {
+        if (bodySplit == null || historyFilesSplit == null) {
             return;
         }
         SwingUtilities.invokeLater(() -> {
@@ -198,7 +212,8 @@ public final class GitPanel extends JPanel {
                 SwingUtilities.invokeLater(this::balanceColumns);
                 return;
             }
-            bodySplit.setDividerLocation(0.5);
+            bodySplit.setDividerLocation(1.0 / 3.0);
+            historyFilesSplit.setDividerLocation(0.5);
         });
     }
 
@@ -306,9 +321,7 @@ public final class GitPanel extends JPanel {
                             changesModel.addElement(change);
                         }
                     }
-                    branchLabel.setText("branch " + data.branch()
-                            + "  (" + stagedModel.size() + " staged, "
-                            + changesModel.size() + " changes)");
+                    branchLabel.setText(data.branch());
                     statusLabel.setText(" ");
                 } catch (Exception ex) {
                     statusLabel.setText("Git error: " + ex.getMessage());
@@ -590,7 +603,11 @@ public final class GitPanel extends JPanel {
             ) {
                 super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
                 if (value instanceof GitChange change) {
-                    setText(change.statusLabel() + "  " + change.path());
+                    String prefix = change.statusLabel() + "  ";
+                    int max = Math.max(24, list.getWidth() / 8 - prefix.length());
+                    String shown = PathEllipsis.middle(change.path(), max);
+                    setText(prefix + shown);
+                    setToolTipText(change.path());
                 }
                 return this;
             }

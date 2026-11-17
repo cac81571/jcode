@@ -6,6 +6,7 @@ package com.jcode.model;
 public record GitStashEntry(
         int index,
         String ref,
+        String id,
         String shortId,
         String message
 ) {
