@@ -110,6 +110,8 @@ public final class FileTreePanel extends JPanel {
     private void showContextMenu(int x, int y, Path selected) {
         JPopupMenu menu = new JPopupMenu();
         boolean isFile = Files.isRegularFile(selected);
+        boolean isDir = Files.isDirectory(selected);
+        TreePath selection = tree.getSelectionPath();
 
         if (isFile) {
             JMenuItem open = new JMenuItem("開く");
@@ -127,6 +129,16 @@ public final class FileTreePanel extends JPanel {
             menu.add(sakura);
         }
 
+        if (isDir && selection != null) {
+            menu.addSeparator();
+            JMenuItem expandAll = new JMenuItem("配下をすべて展開");
+            expandAll.addActionListener(e -> expandAllUnder(selection));
+            menu.add(expandAll);
+            JMenuItem collapseAll = new JMenuItem("配下をすべて折りたたむ");
+            collapseAll.addActionListener(e -> collapseAllUnder(selection));
+            menu.add(collapseAll);
+        }
+
         menu.addSeparator();
         JMenuItem copyName = new JMenuItem("ファイル名をコピー");
         copyName.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK));
@@ -139,6 +151,40 @@ public final class FileTreePanel extends JPanel {
         menu.add(copyPath);
 
         menu.show(tree, x, y);
+    }
+
+    private void expandAllUnder(TreePath path) {
+        if (path == null || !(path.getLastPathComponent() instanceof DefaultMutableTreeNode node)) {
+            return;
+        }
+        expandRecursive(node);
+    }
+
+    private void expandRecursive(DefaultMutableTreeNode node) {
+        tree.expandPath(new TreePath(node.getPath()));
+        for (int i = 0; i < node.getChildCount(); i++) {
+            DefaultMutableTreeNode child = (DefaultMutableTreeNode) node.getChildAt(i);
+            if (!child.isLeaf()) {
+                expandRecursive(child);
+            }
+        }
+    }
+
+    private void collapseAllUnder(TreePath path) {
+        if (path == null || !(path.getLastPathComponent() instanceof DefaultMutableTreeNode node)) {
+            return;
+        }
+        collapseRecursive(node);
+    }
+
+    private void collapseRecursive(DefaultMutableTreeNode node) {
+        for (int i = 0; i < node.getChildCount(); i++) {
+            DefaultMutableTreeNode child = (DefaultMutableTreeNode) node.getChildAt(i);
+            if (!child.isLeaf()) {
+                collapseRecursive(child);
+            }
+        }
+        tree.collapsePath(new TreePath(node.getPath()));
     }
 
     private void openExternally(Path path) {
