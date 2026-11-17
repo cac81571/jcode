@@ -17,10 +17,12 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,22 +53,11 @@ public final class SearchService {
             boolean wholeWord,
             boolean regex
     ) {
-        List<SearchMatch> matches = new ArrayList<>();
         if (query == null || query.isEmpty() || text == null) {
-            return matches;
+            return List.of();
         }
-
         Pattern pattern = compile(query, matchCase, wholeWord, regex);
-        String[] lines = text.split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            String searchLine = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
-            Matcher matcher = pattern.matcher(searchLine);
-            while (matcher.find()) {
-                matches.add(new SearchMatch(file, i + 1, matcher.start() + 1, matcher.end() + 1, searchLine));
-            }
-        }
-        return matches;
+        return findInText(text, file, pattern, query, matchCase, wholeWord, regex);
     }
 
     public static List<SearchMatch> findInWorkspace(
@@ -88,15 +79,15 @@ public final class SearchService {
             String filesToInclude,
             String filesToExclude
     ) throws IOException {
-        List<SearchMatch> matches = new ArrayList<>();
         if (root == null || !Files.isDirectory(root) || query == null || query.isEmpty()) {
-            return matches;
+            return List.of();
         }
 
         Pattern pattern = compile(query, matchCase, wholeWord, regex);
         FilePathFilter pathFilter = FilePathFilter.parse(filesToInclude, filesToExclude);
         Path absoluteRoot = root.toAbsolutePath().normalize();
 
+        List<Path> files = new ArrayList<>();
         Files.walkFileTree(absoluteRoot, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
@@ -117,21 +108,36 @@ public final class SearchService {
                 if (!pathFilter.accept(absoluteRoot, file)) {
                     return FileVisitResult.CONTINUE;
                 }
-                // When include globs are set, trust them; otherwise keep text-extension filter
                 if (!pathFilter.hasIncludes() && !isLikelyText(file)) {
                     return FileVisitResult.CONTINUE;
                 }
-                try {
-                    String content = readText(file);
-                    if (content != null) {
-                        matches.addAll(findInText(content, file, pattern));
-                    }
-                } catch (IOException ignored) {
-                    // binary / unreadable
-                }
+                files.add(file);
                 return FileVisitResult.CONTINUE;
             }
         });
+
+        ConcurrentLinkedQueue<SearchMatch> queue = new ConcurrentLinkedQueue<>();
+        files.parallelStream().forEach(file -> {
+            try {
+                String content = readText(file);
+                if (content == null) {
+                    return;
+                }
+                List<SearchMatch> found = findInText(
+                        content, file, pattern, query, matchCase, wholeWord, regex);
+                if (!found.isEmpty()) {
+                    queue.addAll(found);
+                }
+            } catch (IOException ignored) {
+                // binary / unreadable
+            }
+        });
+
+        List<SearchMatch> matches = new ArrayList<>(queue);
+        matches.sort(Comparator
+                .comparing((SearchMatch m) -> m.file().toString())
+                .thenComparingInt(SearchMatch::lineNumber)
+                .thenComparingInt(SearchMatch::startColumn));
         return matches;
     }
 
@@ -207,6 +213,9 @@ public final class SearchService {
 
     private static DecodedText readTextWithCharset(Path file) throws IOException {
         byte[] bytes = Files.readAllBytes(file);
+        if (containsNul(bytes)) {
+            return null;
+        }
         if (bytes.length >= 3
                 && (bytes[0] & 0xFF) == 0xEF
                 && (bytes[1] & 0xFF) == 0xBB
@@ -230,6 +239,16 @@ public final class SearchService {
         return new DecodedText(new String(bytes, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
     }
 
+    private static boolean containsNul(byte[] bytes) {
+        int limit = Math.min(bytes.length, 8_192);
+        for (int i = 0; i < limit; i++) {
+            if (bytes[i] == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static List<Charset> buildReadCharsets() {
         List<Charset> list = new ArrayList<>();
         list.add(StandardCharsets.UTF_8);
@@ -249,18 +268,78 @@ public final class SearchService {
     private record DecodedText(String text, Charset charset) {
     }
 
-    private static List<SearchMatch> findInText(String text, Path file, Pattern pattern) {
+    private static List<SearchMatch> findInText(
+            String text,
+            Path file,
+            Pattern pattern,
+            String query,
+            boolean matchCase,
+            boolean wholeWord,
+            boolean regex
+    ) {
+        // Cheap reject for literal queries before line scanning / Matcher work
+        if (!regex && !wholeWord && !mayContainLiteral(text, query, matchCase)) {
+            return List.of();
+        }
+
         List<SearchMatch> matches = new ArrayList<>();
-        String[] lines = text.split("\n", -1);
-        for (int i = 0; i < lines.length; i++) {
-            String line = lines[i];
-            String searchLine = line.endsWith("\r") ? line.substring(0, line.length() - 1) : line;
-            Matcher matcher = pattern.matcher(searchLine);
-            while (matcher.find()) {
-                matches.add(new SearchMatch(file, i + 1, matcher.start() + 1, matcher.end() + 1, searchLine));
+        Matcher matcher = pattern.matcher("");
+        int lineStart = 0;
+        int lineNumber = 1;
+        final int length = text.length();
+        while (lineStart <= length) {
+            int nl = text.indexOf('\n', lineStart);
+            int lineEnd = nl < 0 ? length : nl;
+            int contentEnd = lineEnd;
+            if (contentEnd > lineStart && text.charAt(contentEnd - 1) == '\r') {
+                contentEnd--;
             }
+            String searchLine = text.substring(lineStart, contentEnd);
+            matcher.reset(searchLine);
+            while (matcher.find()) {
+                matches.add(new SearchMatch(
+                        file, lineNumber, matcher.start() + 1, matcher.end() + 1, searchLine));
+            }
+            if (nl < 0) {
+                break;
+            }
+            lineStart = nl + 1;
+            lineNumber++;
         }
         return matches;
+    }
+
+    private static boolean mayContainLiteral(String text, String query, boolean matchCase) {
+        if (query.isEmpty()) {
+            return true;
+        }
+        if (matchCase) {
+            return text.contains(query);
+        }
+        return indexOfIgnoreCase(text, query) >= 0;
+    }
+
+    private static int indexOfIgnoreCase(String text, String query) {
+        final int textLen = text.length();
+        final int queryLen = query.length();
+        if (queryLen == 0) {
+            return 0;
+        }
+        if (queryLen > textLen) {
+            return -1;
+        }
+        char firstLower = Character.toLowerCase(query.charAt(0));
+        char firstUpper = Character.toUpperCase(query.charAt(0));
+        for (int i = 0; i <= textLen - queryLen; i++) {
+            char c = text.charAt(i);
+            if (c != firstLower && c != firstUpper) {
+                continue;
+            }
+            if (text.regionMatches(true, i, query, 0, queryLen)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private static Pattern compile(String query, boolean matchCase, boolean wholeWord, boolean regex) {
