@@ -1,5 +1,6 @@
 package com.jcode.service;
 
+import com.jcode.model.CommitGraphCell;
 import com.jcode.model.DiffTexts;
 import com.jcode.model.GitChange;
 import com.jcode.model.GitCommitEntry;
@@ -544,7 +545,7 @@ public final class GitService implements Closeable {
                 Instant when = Instant.ofEpochSecond(commit.getCommitTime());
                 boolean isHead = headName != null && headName.equals(commit.getName());
                 List<String> refs = refsByCommit.getOrDefault(commit.getName(), List.of());
-                String graph = buildGraphPrefix(plotList, commit);
+                GraphBuild graph = buildGraph(plotList, commit);
                 entries.add(new GitCommitEntry(
                         commit.getName(),
                         commit.getName().substring(0, 7),
@@ -555,15 +556,19 @@ public final class GitService implements Closeable {
                         List.copyOf(parents),
                         isHead,
                         refs,
-                        graph
+                        graph.cells(),
+                        graph.commitLane()
                 ));
             }
         }
         return entries;
     }
 
-    /** Build a compact lane graph for one plot commit, e.g. {@code │ ● │ }. */
-    private static String buildGraphPrefix(
+    private record GraphBuild(List<CommitGraphCell> cells, int commitLane) {
+    }
+
+    /** Build lane graph cells for one plot commit. */
+    private static GraphBuild buildGraph(
             PlotCommitList<PlotLane> plotList,
             PlotCommit<PlotLane> commit
     ) {
@@ -583,18 +588,21 @@ public final class GitService implements Closeable {
         int commitPos = own != null ? own.getPosition() : 0;
         max = Math.max(max, commitPos);
 
-        StringBuilder sb = new StringBuilder();
+        List<CommitGraphCell> cells = new ArrayList<>(max + 1);
         for (int pos = 0; pos <= max; pos++) {
+            CommitGraphCell.Kind kind;
             if (pos == commitPos) {
-                sb.append(commit.getParentCount() > 1 ? '◆' : '●');
+                kind = commit.getParentCount() > 1
+                        ? CommitGraphCell.Kind.MERGE
+                        : CommitGraphCell.Kind.COMMIT;
             } else if (passingPos.contains(pos)) {
-                sb.append('│');
+                kind = CommitGraphCell.Kind.PIPE;
             } else {
-                sb.append(' ');
+                kind = CommitGraphCell.Kind.EMPTY;
             }
-            sb.append(' ');
+            cells.add(new CommitGraphCell(pos, kind));
         }
-        return sb.toString();
+        return new GraphBuild(List.copyOf(cells), commitPos);
     }
 
     public enum ResetMode {

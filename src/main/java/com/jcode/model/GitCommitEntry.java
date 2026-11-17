@@ -16,8 +16,8 @@ public record GitCommitEntry(
         List<String> parentIds,
         boolean head,
         List<String> refs,
-        /** ASCII/Unicode lane graph prefix, e.g. {@code │ ● }. */
-        String graph
+        List<CommitGraphCell> graphCells,
+        int commitLane
 ) {
     public String displayRefs() {
         if (refs == null || refs.isEmpty()) {
@@ -26,7 +26,18 @@ public record GitCommitEntry(
         return String.join(", ", refs);
     }
 
-    public String graphOrEmpty() {
-        return graph == null ? "" : graph;
+    public List<CommitGraphCell> graphCellsOrEmpty() {
+        return graphCells == null ? List.of() : graphCells;
+    }
+
+    public String graphPlain() {
+        if (graphCells == null || graphCells.isEmpty()) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (CommitGraphCell cell : graphCells) {
+            sb.append(cell.symbol()).append(' ');
+        }
+        return sb.toString();
     }
 }

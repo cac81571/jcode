@@ -1,5 +1,6 @@
 package com.jcode.ui.git;
 
+import com.jcode.model.CommitGraphCell;
 import com.jcode.model.GitCommitEntry;
 import com.jcode.service.GitService;
 import com.jcode.ui.UiFonts;
@@ -27,6 +28,7 @@ import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Consumer;
 
@@ -292,10 +294,10 @@ public final class GitLogPanel extends JPanel {
             setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 18));
 
             Font ui = UiFonts.ui(13f);
-            // Mono keeps lane columns aligned; message/meta use UI font
-            graph.setFont(UiFonts.mono(13f));
+            // Mono keeps lane columns aligned; slightly smaller than message
+            graph.setFont(UiFonts.mono(11f));
             title.setFont(ui);
-            authorPad.setFont(UiFonts.mono(13f));
+            authorPad.setFont(UiFonts.mono(11f));
             author.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setFont(UiFonts.ui(12f).deriveFont(Font.PLAIN));
             time.setHorizontalAlignment(SwingConstants.RIGHT);
@@ -329,30 +331,15 @@ public final class GitLogPanel extends JPanel {
                 author.setText("");
                 time.setText("");
             } else {
-                String g = entry.graphOrEmpty();
-                graph.setText(g);
+                String plainGraph = entry.graphPlain();
+                graph.setText(coloredGraphHtml(entry.graphCellsOrEmpty(), isSelected));
                 title.setText(entry.shortMessage());
                 authorPad.setText("");
-                int pad = graph.getFontMetrics(graph.getFont()).stringWidth(g);
+                int pad = graph.getFontMetrics(UiFonts.mono(11f)).stringWidth(plainGraph);
                 authorPad.setPreferredSize(new Dimension(pad, 1));
                 authorPad.setMinimumSize(new Dimension(pad, 1));
                 author.setText(entry.author() == null ? "" : entry.author());
-                String refs = entry.displayRefs();
-                StringBuilder right = new StringBuilder();
-                if (entry.head()) {
-                    right.append("HEAD");
-                }
-                if (!refs.isEmpty()) {
-                    if (!right.isEmpty()) {
-                        right.append(", ");
-                    }
-                    right.append(refs);
-                }
-                if (!right.isEmpty()) {
-                    time.setText(right.toString());
-                } else {
-                    time.setText(TIME_FMT.format(entry.when()));
-                }
+                time.setText(rightLabelHtml(entry, isSelected));
                 setToolTipText(entry.id().substring(0, 7) + "\n" + entry.fullMessage());
             }
 
@@ -369,7 +356,6 @@ public final class GitLogPanel extends JPanel {
                 fg = isSelected ? Color.WHITE : new Color(30, 30, 30);
             }
             setBackground(bg);
-            graph.setForeground(fg);
             title.setForeground(fg);
             Color muted = isSelected ? fg : new Color(
                     (fg.getRed() * 2 + 120) / 3,
@@ -377,7 +363,6 @@ public final class GitLogPanel extends JPanel {
                     (fg.getBlue() * 2 + 120) / 3
             );
             author.setForeground(muted);
-            time.setForeground(muted);
             authorPad.setForeground(bg);
 
             int width = list.getWidth();
@@ -386,6 +371,70 @@ public final class GitLogPanel extends JPanel {
             }
             setPreferredSize(new Dimension(Math.max(120, width), 38));
             return this;
+        }
+
+        private static String coloredGraphHtml(List<CommitGraphCell> cells, boolean selected) {
+            if (cells.isEmpty()) {
+                return "";
+            }
+            StringBuilder html = new StringBuilder(
+                    "<html><nobr><span style='font-size:11pt; font-family:monospace'>");
+            for (CommitGraphCell cell : cells) {
+                if (cell.kind() == CommitGraphCell.Kind.EMPTY) {
+                    html.append("&nbsp;&nbsp;");
+                    continue;
+                }
+                Color color = selected
+                        ? UIManager.getColor("List.selectionForeground")
+                        : BranchColors.forLane(cell.lane());
+                if (color == null) {
+                    color = BranchColors.forLane(cell.lane());
+                }
+                html.append("<font color='").append(BranchColors.html(color)).append("'>")
+                        .append(cell.symbol())
+                        .append("</font>&nbsp;");
+            }
+            html.append("</span></nobr></html>");
+            return html.toString();
+        }
+
+        private static String rightLabelHtml(GitCommitEntry entry, boolean selected) {
+            List<String> labels = new ArrayList<>();
+            if (entry.head()) {
+                labels.add("HEAD");
+            }
+            if (entry.refs() != null) {
+                labels.addAll(entry.refs());
+            }
+            if (labels.isEmpty()) {
+                return TIME_FMT.format(entry.when());
+            }
+            if (selected) {
+                return String.join(", ", labels);
+            }
+            StringBuilder html = new StringBuilder("<html><nobr>");
+            for (int i = 0; i < labels.size(); i++) {
+                if (i > 0) {
+                    html.append("<font color='#888888'>, </font>");
+                }
+                String label = labels.get(i);
+                Color color = "HEAD".equals(label)
+                        ? BranchColors.forLane(entry.commitLane())
+                        : BranchColors.forBranch(label);
+                // Prefer lane color when label is the only branch tip on this commit
+                if (labels.size() == 1 || (labels.size() == 2 && entry.head() && i == 1)) {
+                    color = BranchColors.forLane(entry.commitLane());
+                }
+                html.append("<font color='").append(BranchColors.html(color)).append("'>")
+                        .append(escapeHtml(label))
+                        .append("</font>");
+            }
+            html.append("</nobr></html>");
+            return html.toString();
+        }
+
+        private static String escapeHtml(String text) {
+            return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
         }
     }
 }
