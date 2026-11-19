@@ -67,7 +67,7 @@ public final class SearchService {
             boolean wholeWord,
             boolean regex
     ) throws IOException {
-        return findInWorkspace(root, query, matchCase, wholeWord, regex, null, null);
+        return findInWorkspace(root, query, matchCase, wholeWord, regex, null, null, null, null);
     }
 
     public static List<SearchMatch> findInWorkspace(
@@ -76,15 +76,17 @@ public final class SearchService {
             boolean matchCase,
             boolean wholeWord,
             boolean regex,
-            String filesToInclude,
-            String filesToExclude
+            String includeFiles,
+            String includeDirs,
+            String excludeFiles,
+            String excludeDirs
     ) throws IOException {
         if (root == null || !Files.isDirectory(root) || query == null || query.isEmpty()) {
             return List.of();
         }
 
         Pattern pattern = compile(query, matchCase, wholeWord, regex);
-        FilePathFilter pathFilter = FilePathFilter.parse(filesToInclude, filesToExclude);
+        FilePathFilter pathFilter = FilePathFilter.parse(includeFiles, includeDirs, excludeFiles, excludeDirs);
         Path absoluteRoot = root.toAbsolutePath().normalize();
 
         List<Path> files = new ArrayList<>();
@@ -108,7 +110,7 @@ public final class SearchService {
                 if (!pathFilter.accept(absoluteRoot, file)) {
                     return FileVisitResult.CONTINUE;
                 }
-                if (!pathFilter.hasIncludes() && !isLikelyText(file)) {
+                if (!pathFilter.hasFileIncludes() && !isLikelyText(file)) {
                     return FileVisitResult.CONTINUE;
                 }
                 files.add(file);
@@ -133,6 +135,10 @@ public final class SearchService {
             }
         });
 
+        return sorted(queue);
+    }
+
+    private static List<SearchMatch> sorted(ConcurrentLinkedQueue<SearchMatch> queue) {
         List<SearchMatch> matches = new ArrayList<>(queue);
         matches.sort(Comparator
                 .comparing((SearchMatch m) -> m.file().toString())

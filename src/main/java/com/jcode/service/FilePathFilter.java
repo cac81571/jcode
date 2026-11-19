@@ -9,48 +9,71 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * VS Code-style include / exclude globs for workspace search.
- * Patterns are comma- or semicolon-separated; a bare {@code *.java} means any-directory match.
+ * Include / exclude globs split by files and directories.
+ * Patterns are comma- or semicolon-separated. A bare {@code *.java} or {@code src}
+ * matches in any directory.
  */
 public final class FilePathFilter {
 
-    private final List<PathMatcher> includes;
-    private final List<PathMatcher> excludes;
+    private final List<PathMatcher> includeFiles;
+    private final List<PathMatcher> includeDirs;
+    private final List<String> includeDirNames;
+    private final List<PathMatcher> excludeFiles;
+    private final List<PathMatcher> excludeDirs;
     private final List<String> excludeDirNames;
 
     private FilePathFilter(
-            List<PathMatcher> includes,
-            List<PathMatcher> excludes,
+            List<PathMatcher> includeFiles,
+            List<PathMatcher> includeDirs,
+            List<String> includeDirNames,
+            List<PathMatcher> excludeFiles,
+            List<PathMatcher> excludeDirs,
             List<String> excludeDirNames
     ) {
-        this.includes = includes;
-        this.excludes = excludes;
+        this.includeFiles = includeFiles;
+        this.includeDirs = includeDirs;
+        this.includeDirNames = includeDirNames;
+        this.excludeFiles = excludeFiles;
+        this.excludeDirs = excludeDirs;
         this.excludeDirNames = excludeDirNames;
     }
 
-    public static FilePathFilter parse(String includeText, String excludeText) {
-        List<String> dirNames = new ArrayList<>();
-        List<PathMatcher> excludeMatchers = parseGlobs(excludeText, dirNames);
-        return new FilePathFilter(parseGlobs(includeText, null), excludeMatchers, dirNames);
+    public static FilePathFilter parse(
+            String includeFiles,
+            String includeDirs,
+            String excludeFiles,
+            String excludeDirs
+    ) {
+        List<String> includeNames = new ArrayList<>();
+        List<String> excludeNames = new ArrayList<>();
+        return new FilePathFilter(
+                parseGlobs(includeFiles, null),
+                parseGlobs(includeDirs, includeNames),
+                includeNames,
+                parseGlobs(excludeFiles, null),
+                parseGlobs(excludeDirs, excludeNames),
+                excludeNames
+        );
     }
 
-    public boolean hasIncludes() {
-        return !includes.isEmpty();
+    public boolean hasFileIncludes() {
+        return !includeFiles.isEmpty();
     }
 
     public boolean accept(Path root, Path file) {
         String relative = relativize(root, file);
-        if (matchesAny(excludes, relative)) {
+        if (matchesAny(excludeFiles, relative) || underMatchingDir(relative, excludeDirs, excludeDirNames)) {
             return false;
         }
-        if (includes.isEmpty()) {
-            return true;
+        if (!includeFiles.isEmpty() && !matchesAny(includeFiles, relative)) {
+            return false;
         }
-        return matchesAny(includes, relative);
+        return includeDirs.isEmpty() || underMatchingDir(relative, includeDirs, includeDirNames);
     }
 
     /**
-     * Skip a directory subtree when its name or relative path matches exclude rules.
+     * Skip a directory subtree when that directory matches an exclude-dir rule.
+     * Include-dir rules do not skip here, because a child folder may still match.
      */
     public boolean skipDirectory(Path root, Path dir) {
         if (root == null || dir == null) {
@@ -67,8 +90,33 @@ public final class FilePathFilter {
         if (excludeDirNames.contains(name)) {
             return true;
         }
-        String relative = relativize(root, dir);
-        return matchesAny(excludes, relative);
+        return matchesAny(excludeDirs, relativize(root, dir));
+    }
+
+    private static boolean underMatchingDir(String relativeFile, List<PathMatcher> matchers, List<String> names) {
+        if ((matchers.isEmpty() && names.isEmpty()) || relativeFile == null) {
+            return false;
+        }
+        int slash = relativeFile.lastIndexOf('/');
+        if (slash < 0) {
+            return false;
+        }
+        String dir = relativeFile.substring(0, slash);
+        while (!dir.isEmpty()) {
+            if (matchesAny(matchers, dir)) {
+                return true;
+            }
+            int split = dir.lastIndexOf('/');
+            String name = (split < 0 ? dir : dir.substring(split + 1)).toLowerCase(Locale.ROOT);
+            if (names.contains(name)) {
+                return true;
+            }
+            if (split < 0) {
+                break;
+            }
+            dir = dir.substring(0, split);
+        }
+        return false;
     }
 
     private static boolean matchesAny(List<PathMatcher> matchers, String relative) {
@@ -77,7 +125,6 @@ public final class FilePathFilter {
         }
         Path path;
         try {
-            // Build from segments so '*' never appears as a path char (Windows)
             String[] parts = relative.replace('\\', '/').split("/");
             path = Path.of("", parts);
         } catch (InvalidPathException ex) {
@@ -104,17 +151,30 @@ public final class FilePathFilter {
             if (dirNamesOut != null) {
                 collectDirName(raw, dirNamesOut);
             }
-            String glob = normalizeGlob(raw);
-            try {
-                matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
-            } catch (IllegalArgumentException ignored) {
-                // skip invalid pattern (includes InvalidPathException)
-            }
+            addGlob(matchers, normalizeGlob(raw));
         }
         return matchers;
     }
 
-    /** Extract simple directory names from patterns like test, star-star/test, star-star/test/star-star. */
+    private static void addGlob(List<PathMatcher> matchers, String glob) {
+        try {
+            matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
+        } catch (IllegalArgumentException ignored) {
+            return;
+        }
+        if (glob.endsWith("/**")) {
+            String base = glob.substring(0, glob.length() - 3);
+            if (!base.isEmpty()) {
+                try {
+                    matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + base));
+                } catch (IllegalArgumentException ignored) {
+                    // the broader pattern is already registered
+                }
+            }
+        }
+    }
+
+    /** Extract simple directory names from patterns like {@code test} or {@code star-star/test/star-star}. */
     private static void collectDirName(String raw, List<String> dirNamesOut) {
         String g = raw.replace('\\', '/');
         while (g.startsWith("**/")) {
@@ -136,7 +196,6 @@ public final class FilePathFilter {
         if (g.startsWith("./")) {
             g = g.substring(2);
         }
-        // "*.java" → "**/*.java" (any directory), same as VS Code
         if (!g.contains("/")) {
             return "**/" + g;
         }

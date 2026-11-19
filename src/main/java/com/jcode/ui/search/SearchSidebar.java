@@ -57,16 +57,18 @@ import java.util.function.Supplier;
 public final class SearchSidebar extends JPanel {
 
     private static final int PATH_MAX = 36;
-    private static final String VIEW_TEXT = "テキスト";
-    private static final String VIEW_TABLE = "テーブル";
 
     private final DefaultComboBoxModel<String> historyModel = new DefaultComboBoxModel<>();
-    private final DefaultComboBoxModel<String> includeHistoryModel = new DefaultComboBoxModel<>();
-    private final DefaultComboBoxModel<String> excludeHistoryModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> includeFileHistoryModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> includeDirHistoryModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> excludeFileHistoryModel = new DefaultComboBoxModel<>();
+    private final DefaultComboBoxModel<String> excludeDirHistoryModel = new DefaultComboBoxModel<>();
     private final JComboBox<String> queryField = new JComboBox<>(historyModel);
     private final JTextField replaceField = new JTextField();
-    private final JComboBox<String> includeField = new JComboBox<>(includeHistoryModel);
-    private final JComboBox<String> excludeField = new JComboBox<>(excludeHistoryModel);
+    private final JComboBox<String> includeFileField = new JComboBox<>(includeFileHistoryModel);
+    private final JComboBox<String> includeDirField = new JComboBox<>(includeDirHistoryModel);
+    private final JComboBox<String> excludeFileField = new JComboBox<>(excludeFileHistoryModel);
+    private final JComboBox<String> excludeDirField = new JComboBox<>(excludeDirHistoryModel);
     private final JCheckBox matchCase = new JCheckBox("大文字小文字を区別");
     private final JCheckBox wholeWord = new JCheckBox("単語単位");
     private final JCheckBox regex = new JCheckBox("正規表現");
@@ -76,11 +78,11 @@ public final class SearchSidebar extends JPanel {
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("results");
     private final DefaultTreeModel treeModel = new DefaultTreeModel(rootNode);
     private final JTree resultsTree = new JTree(treeModel);
-    private final JComboBox<String> viewMode = new JComboBox<>(new String[]{VIEW_TEXT, VIEW_TABLE});
     private final JButton collapseAllBtn = new JButton("全て折りたたむ");
     private final JButton expandAllBtn = new JButton("全て展開");
     private final JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-    private final JButton openInEditorBtn = new JButton("エディタで開く");
+    private final JButton tableViewBtn = new JButton("テーブル表示");
+    private final JButton editorViewBtn = new JButton("エディタ表示");
     private final JButton replaceAllBtn = new JButton("すべて置換");
     private final Supplier<Path> workspaceRoot;
     private Supplier<ActiveFile> activeFile = () -> null;
@@ -119,19 +121,33 @@ public final class SearchSidebar extends JPanel {
 
         queryField.setEditable(true);
         queryField.setToolTipText("検索キーワード（履歴から選択可 / 右クリックで履歴クリア）");
-        includeField.setEditable(true);
-        excludeField.setEditable(true);
-        includeField.setToolTipText("files to include（カンマ区切りの glob。空ならすべて / 履歴あり）");
-        excludeField.setToolTipText("files to exclude（カンマ区切りの glob / 履歴あり）");
-        setComboPlaceholder(includeField, "例: *.java, src/**");
-        setComboPlaceholder(excludeField, "例: **/test/**, *.min.js");
+        configureFilter(
+                includeFileField,
+                "対象ファイル（カンマ区切りの glob。空ならすべて）",
+                "例: *.java, **/Foo.java",
+                SearchHistory.Kind.INCLUDE_FILE,
+                "Include(file) 履歴をクリア");
+        configureFilter(
+                includeDirField,
+                "対象フォルダ（カンマ区切り。配下のファイルを検索。空ならすべて）",
+                "例: src, src/main",
+                SearchHistory.Kind.INCLUDE_DIR,
+                "Include(dir) 履歴をクリア");
+        configureFilter(
+                excludeFileField,
+                "除外ファイル（カンマ区切りの glob）",
+                "例: *.min.js",
+                SearchHistory.Kind.EXCLUDE_FILE,
+                "Exclude(file) 履歴をクリア");
+        configureFilter(
+                excludeDirField,
+                "除外フォルダ（カンマ区切り。その配下は検索しない）",
+                "例: target, test",
+                SearchHistory.Kind.EXCLUDE_DIR,
+                "Exclude(dir) 履歴をクリア");
         reloadHistoryModel();
         reloadFilterHistoryModels();
         installHistoryPopup(queryField, SearchHistory.Kind.QUERY, "検索履歴をクリア");
-        installHistoryPopup(includeField, SearchHistory.Kind.INCLUDE, "Include 履歴をクリア");
-        installHistoryPopup(excludeField, SearchHistory.Kind.EXCLUDE, "Exclude 履歴をクリア");
-        installFilterAutoSearch(includeField);
-        installFilterAutoSearch(excludeField);
 
         JPanel opts = new JPanel(new FlowLayout(FlowLayout.RIGHT, 2, 0));
         opts.add(matchCase);
@@ -166,30 +182,39 @@ public final class SearchSidebar extends JPanel {
         replaceRow.add(replaceField, BorderLayout.CENTER);
         replaceRow.add(replaceAllBtn, BorderLayout.EAST);
 
-        JLabel includeLabel = new JLabel("Include");
-        JLabel excludeLabel = new JLabel("Exclude");
-        equalizeLabelWidth(includeLabel, excludeLabel);
+        JLabel includeFileLabel = new JLabel("Include(file)");
+        JLabel includeDirLabel = new JLabel("Include(dir)");
+        JLabel excludeFileLabel = new JLabel("Exclude(file)");
+        JLabel excludeDirLabel = new JLabel("Exclude(dir)");
+        equalizeLabelWidth(includeFileLabel, includeDirLabel, excludeFileLabel, excludeDirLabel);
 
-        JPanel includeRow = labeledRow(includeLabel, includeField);
-        JPanel excludeRow = labeledRow(excludeLabel, excludeField);
+        JPanel includeFileRow = labeledRow(includeFileLabel, includeFileField);
+        JPanel includeDirRow = labeledRow(includeDirLabel, includeDirField);
+        JPanel excludeFileRow = labeledRow(excludeFileLabel, excludeFileField);
+        JPanel excludeDirRow = labeledRow(excludeDirLabel, excludeDirField);
 
-        openInEditorBtn.setEnabled(false);
-        openInEditorBtn.setToolTipText("検索結果を右側に開く");
-        openInEditorBtn.addActionListener(e -> openResultsInEditor());
-
-        viewMode.setToolTipText("右側に開くときの形式");
-        viewMode.addActionListener(e -> updateOpenFormat());
+        tableViewBtn.setEnabled(false);
+        editorViewBtn.setEnabled(false);
+        tableViewBtn.setToolTipText("検索結果をテーブルとして右側に開く（前後 N 行。● がヒット行）");
+        editorViewBtn.setToolTipText("検索結果をテキストとして右側に開く（前後 N 行）");
+        tableViewBtn.addActionListener(e -> openResults(true));
+        editorViewBtn.addActionListener(e -> openResults(false));
 
         JPanel editorActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         editorActions.add(new JLabel("前後"));
         editorActions.add(contextSpinner);
         editorActions.add(new JLabel("行"));
-        editorActions.add(new JLabel("表示"));
-        editorActions.add(viewMode);
-        editorActions.add(openInEditorBtn);
+        editorActions.add(tableViewBtn);
+        editorActions.add(editorViewBtn);
 
         foldBtns.add(expandAllBtn);
         foldBtns.add(collapseAllBtn);
+
+        JButton useHitFiles = new JButton("ヒットしたファイルを条件設定");
+        useHitFiles.setToolTipText("ヒットしたファイルのパスを Include(file) にセットします");
+        useHitFiles.addActionListener(e -> applyHitFilesAsInclude());
+        JPanel hitFileRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        hitFileRow.add(useHitFiles);
 
         JPanel scopeRow = new JPanel(new BorderLayout(4, 0));
         scopeRow.add(openFileOnly, BorderLayout.WEST);
@@ -197,12 +222,21 @@ public final class SearchSidebar extends JPanel {
 
         JPanel filterBlock = new JPanel();
         filterBlock.setLayout(new BoxLayout(filterBlock, BoxLayout.Y_AXIS));
-        includeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        excludeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        includeFileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        includeDirRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        excludeFileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        excludeDirRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        hitFileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         scopeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        filterBlock.add(includeRow);
+        filterBlock.add(includeFileRow);
         filterBlock.add(Box.createVerticalStrut(4));
-        filterBlock.add(excludeRow);
+        filterBlock.add(includeDirRow);
+        filterBlock.add(Box.createVerticalStrut(4));
+        filterBlock.add(excludeFileRow);
+        filterBlock.add(Box.createVerticalStrut(4));
+        filterBlock.add(excludeDirRow);
+        filterBlock.add(Box.createVerticalStrut(4));
+        filterBlock.add(hitFileRow);
         filterBlock.add(Box.createVerticalStrut(4));
         filterBlock.add(scopeRow);
 
@@ -233,17 +267,6 @@ public final class SearchSidebar extends JPanel {
 
         add(north, BorderLayout.NORTH);
         add(resultsArea, BorderLayout.CENTER);
-        updateOpenFormat();
-    }
-
-    private boolean isTableView() {
-        return VIEW_TABLE.equals(viewMode.getSelectedItem());
-    }
-
-    private void updateOpenFormat() {
-        openInEditorBtn.setToolTipText(isTableView()
-                ? "検索結果をテーブルとして右側に開く（前後 N 行。● がヒット行）"
-                : "検索結果をテキストとして右側に開く（前後 N 行）");
     }
 
     private void setupResultsTree() {
@@ -334,9 +357,25 @@ public final class SearchSidebar extends JPanel {
         reloadComboHistory(queryField, historyModel, SearchHistory.Kind.QUERY);
     }
 
+    private void configureFilter(
+            JComboBox<String> field,
+            String tip,
+            String placeholder,
+            SearchHistory.Kind kind,
+            String clearLabel
+    ) {
+        field.setEditable(true);
+        field.setToolTipText(tip);
+        setComboPlaceholder(field, placeholder);
+        installHistoryPopup(field, kind, clearLabel);
+        installFilterAutoSearch(field);
+    }
+
     private void reloadFilterHistoryModels() {
-        reloadComboHistory(includeField, includeHistoryModel, SearchHistory.Kind.INCLUDE);
-        reloadComboHistory(excludeField, excludeHistoryModel, SearchHistory.Kind.EXCLUDE);
+        reloadComboHistory(includeFileField, includeFileHistoryModel, SearchHistory.Kind.INCLUDE_FILE);
+        reloadComboHistory(includeDirField, includeDirHistoryModel, SearchHistory.Kind.INCLUDE_DIR);
+        reloadComboHistory(excludeFileField, excludeFileHistoryModel, SearchHistory.Kind.EXCLUDE_FILE);
+        reloadComboHistory(excludeDirField, excludeDirHistoryModel, SearchHistory.Kind.EXCLUDE_DIR);
     }
 
     private static void reloadComboHistory(
@@ -387,7 +426,7 @@ public final class SearchSidebar extends JPanel {
             if (open == null || open.path() == null) {
                 clearResults();
                 summary.setText("開いているファイルがありません");
-                openInEditorBtn.setEnabled(false);
+                setResultActionsEnabled(false);
                 replaceAllBtn.setEnabled(false);
                 return;
             }
@@ -396,19 +435,25 @@ public final class SearchSidebar extends JPanel {
             return;
         }
 
-        String include = comboText(includeField).trim();
-        String exclude = comboText(excludeField).trim();
+        String includeFiles = comboText(includeFileField).trim();
+        String includeDirs = comboText(includeDirField).trim();
+        String excludeFiles = comboText(excludeFileField).trim();
+        String excludeDirs = comboText(excludeDirField).trim();
 
         suppressFilterAutoSearch = true;
         try {
             SearchHistory.remember(query);
-            SearchHistory.remember(SearchHistory.Kind.INCLUDE, include);
-            SearchHistory.remember(SearchHistory.Kind.EXCLUDE, exclude);
+            SearchHistory.remember(SearchHistory.Kind.INCLUDE_FILE, includeFiles);
+            SearchHistory.remember(SearchHistory.Kind.INCLUDE_DIR, includeDirs);
+            SearchHistory.remember(SearchHistory.Kind.EXCLUDE_FILE, excludeFiles);
+            SearchHistory.remember(SearchHistory.Kind.EXCLUDE_DIR, excludeDirs);
             reloadHistoryModel();
             reloadFilterHistoryModels();
             queryField.getEditor().setItem(query);
-            includeField.getEditor().setItem(include);
-            excludeField.getEditor().setItem(exclude);
+            includeFileField.getEditor().setItem(includeFiles);
+            includeDirField.getEditor().setItem(includeDirs);
+            excludeFileField.getEditor().setItem(excludeFiles);
+            excludeDirField.getEditor().setItem(excludeDirs);
         } finally {
             suppressFilterAutoSearch = false;
         }
@@ -429,7 +474,8 @@ public final class SearchSidebar extends JPanel {
                     Path filterRoot = searchRoot != null
                             ? searchRoot
                             : (target.path().getParent() != null ? target.path().getParent() : target.path());
-                    FilePathFilter filter = FilePathFilter.parse(include, exclude);
+                    FilePathFilter filter = FilePathFilter.parse(
+                            includeFiles, includeDirs, excludeFiles, excludeDirs);
                     if (!filter.accept(filterRoot, target.path())) {
                         return List.of();
                     }
@@ -437,7 +483,7 @@ public final class SearchSidebar extends JPanel {
                             target.text(), target.path(), query, mc, ww, rx));
                 }
                 return groupByFile(SearchService.findInWorkspace(
-                        searchRoot, query, mc, ww, rx, include, exclude));
+                        searchRoot, query, mc, ww, rx, includeFiles, includeDirs, excludeFiles, excludeDirs));
             }
 
             @Override
@@ -452,18 +498,54 @@ public final class SearchSidebar extends JPanel {
                     showResults(groups);
                     int hits = groups.stream().mapToInt(SearchFileGroup::hitCount).sum();
                     summary.setText(groups.size() + " ファイル · " + hits + " 件");
-                    openInEditorBtn.setEnabled(!groups.isEmpty());
+                    setResultActionsEnabled(!groups.isEmpty());
                     replaceAllBtn.setEnabled(!groups.isEmpty());
                 } catch (Exception ex) {
                     if (generation != searchGeneration) {
                         return;
                     }
                     summary.setText("検索失敗: " + ex.getMessage());
-                    openInEditorBtn.setEnabled(false);
+                    setResultActionsEnabled(false);
                     replaceAllBtn.setEnabled(false);
                 }
             }
         }.execute();
+    }
+
+    private void applyHitFilesAsInclude() {
+        if (lastGroups.isEmpty()) {
+            summary.setText("ヒットしたファイルがありません");
+            return;
+        }
+        Path root = workspaceRoot.get();
+        StringBuilder value = new StringBuilder();
+        int count = 0;
+        for (SearchFileGroup group : lastGroups) {
+            if (group.file() == null) {
+                continue;
+            }
+            if (count > 0) {
+                value.append(", ");
+            }
+            value.append(includePattern(root, group.file()));
+            count++;
+        }
+        includeFileField.getEditor().setItem(value.toString());
+        summary.setText(count + " ファイルを Include(file) に設定しました");
+    }
+
+    private static String includePattern(Path root, Path file) {
+        try {
+            if (root != null) {
+                return root.toAbsolutePath().normalize()
+                        .relativize(file.toAbsolutePath().normalize())
+                        .toString()
+                        .replace('\\', '/');
+            }
+        } catch (IllegalArgumentException ignored) {
+            // file is outside the workspace
+        }
+        return file.getFileName() == null ? file.toString() : file.getFileName().toString();
     }
 
     private void runReplaceAll() {
@@ -536,13 +618,18 @@ public final class SearchSidebar extends JPanel {
         }.execute();
     }
 
-    private void openResultsInEditor() {
+    private void setResultActionsEnabled(boolean enabled) {
+        tableViewBtn.setEnabled(enabled);
+        editorViewBtn.setEnabled(enabled);
+    }
+
+    private void openResults(boolean table) {
         if (lastGroups.isEmpty()) {
             return;
         }
         String title = "Search: " + (lastQuery.isBlank() ? "(empty)" : truncateLine(lastQuery, 40));
         int context = (Integer) contextSpinner.getValue();
-        if (isTableView()) {
+        if (table) {
             onOpenTable.accept(new SearchTableRequest(title, flatMatches, context));
             return;
         }
@@ -584,7 +671,7 @@ public final class SearchSidebar extends JPanel {
         lastGroups = List.of();
         flatMatches = List.of();
         lastQuery = "";
-        openInEditorBtn.setEnabled(false);
+        setResultActionsEnabled(false);
         replaceAllBtn.setEnabled(false);
         rootNode.removeAllChildren();
         treeModel.reload(rootNode);

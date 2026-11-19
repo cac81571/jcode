@@ -13,8 +13,10 @@ public final class SearchHistory {
 
     public enum Kind {
         QUERY("search.keywords"),
-        INCLUDE("search.include"),
-        EXCLUDE("search.exclude");
+        INCLUDE_FILE("search.include.file"),
+        INCLUDE_DIR("search.include.dir"),
+        EXCLUDE_FILE("search.exclude.file"),
+        EXCLUDE_DIR("search.exclude.dir");
 
         private final String key;
 
