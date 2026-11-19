@@ -3,7 +3,9 @@ package com.jcode.ui.editor;
 import com.jcode.model.DiffTexts;
 import com.jcode.service.ExternalOpener;
 import com.jcode.service.SakuraLauncher;
+import com.jcode.model.SearchMatch;
 import com.jcode.ui.git.DiffViewerPanel;
+import com.jcode.ui.search.SearchResultsTablePanel;
 import org.fife.ui.rsyntaxtextarea.SyntaxConstants;
 
 import javax.swing.BorderFactory;
@@ -19,6 +21,7 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
+import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.event.MouseAdapter;
@@ -36,8 +39,13 @@ public final class EditorTabManager {
 
     private final JTabbedPane tabs = new JTabbedPane();
     private final Map<Path, CodeEditorPane> openEditors = new HashMap<>();
+    /** Explorer single-click reuses this tab. Double-click and other opens pin it. */
+    private CodeEditorPane preview;
     private DiffViewerPanel diffViewer;
+    private SearchResultsTablePanel searchTable;
     private Consumer<CodeEditorPane> onActiveChanged = e -> {
+    };
+    private Consumer<CodeEditorPane> onTextChanged = e -> {
     };
 
     public EditorTabManager() {
@@ -58,21 +66,72 @@ public final class EditorTabManager {
         this.onActiveChanged = onActiveChanged;
     }
 
+    public void setOnTextChanged(Consumer<CodeEditorPane> onTextChanged) {
+        this.onTextChanged = onTextChanged != null ? onTextChanged : e -> {
+        };
+    }
+
     public CodeEditorPane open(Path file) throws IOException {
+        CodeEditorPane editor = openNew(file, -1);
+        pin(editor);
+        return editor;
+    }
+
+    /**
+     * Explorer single-click: reuse one tab. An already open file is selected as-is.
+     * Returns null when replacing a dirty preview was cancelled.
+     */
+    public CodeEditorPane openInPreview(Path file) throws IOException {
         Path key = file.toAbsolutePath().normalize();
         CodeEditorPane existing = openEditors.get(key);
         if (existing != null) {
             tabs.setSelectedComponent(existing.getComponent());
             return existing;
         }
+        int insertAt = -1;
+        if (preview != null) {
+            insertAt = tabs.indexOfComponent(preview.getComponent());
+            if (insertAt >= 0 && !closeEditor(preview)) {
+                return null;
+            }
+        }
+        CodeEditorPane editor = openNew(key, insertAt);
+        preview = editor;
+        refreshTabTitle(editor);
+        return editor;
+    }
 
+    private CodeEditorPane openNew(Path file, int index) throws IOException {
+        Path key = file.toAbsolutePath().normalize();
+        CodeEditorPane existing = openEditors.get(key);
+        if (existing != null) {
+            tabs.setSelectedComponent(existing.getComponent());
+            return existing;
+        }
         CodeEditorPane editor = new CodeEditorPane(key);
+        editor.setOnTextChanged(() -> {
+            if (getActiveEditor() == editor) {
+                onTextChanged.accept(editor);
+            }
+        });
         openEditors.put(key, editor);
-        tabs.addTab(tabTitle(editor), editor.getComponent());
-        int index = tabs.indexOfComponent(editor.getComponent());
-        tabs.setTabComponentAt(index, createTabHeader(tabTitle(editor), () -> closeEditor(editor)));
+        String title = tabTitle(editor);
+        if (index < 0 || index > tabs.getTabCount()) {
+            tabs.addTab(title, editor.getComponent());
+        } else {
+            tabs.insertTab(title, null, editor.getComponent(), null, index);
+        }
+        int at = tabs.indexOfComponent(editor.getComponent());
+        tabs.setTabComponentAt(at, createTabHeader(title, () -> closeEditor(editor)));
         tabs.setSelectedComponent(editor.getComponent());
         return editor;
+    }
+
+    private void pin(CodeEditorPane editor) {
+        if (editor != null && preview == editor) {
+            preview = null;
+            refreshTabTitle(editor);
+        }
     }
 
     /**
@@ -100,6 +159,34 @@ public final class EditorTabManager {
         }
         diffViewer.showDiff(texts);
         tabs.setSelectedComponent(diffViewer);
+    }
+
+    /**
+     * Shows search hits in a table tab in the editor area.
+     */
+    public void showSearchResultsTable(
+            String title,
+            java.util.List<SearchMatch> matches,
+            java.nio.file.Path workspaceRoot,
+            int contextLines
+    ) {
+        if (searchTable == null) {
+            searchTable = new SearchResultsTablePanel();
+            tabs.addTab(title, searchTable);
+            int index = tabs.indexOfComponent(searchTable);
+            tabs.setTabComponentAt(index, createTabHeader(title, this::closeSearchTable));
+        } else {
+            int index = tabs.indexOfComponent(searchTable);
+            if (index < 0) {
+                tabs.addTab(title, searchTable);
+                index = tabs.indexOfComponent(searchTable);
+                tabs.setTabComponentAt(index, createTabHeader(title, this::closeSearchTable));
+            } else {
+                updateTabHeaderTitle(index, title);
+            }
+        }
+        searchTable.setMatches(matches, workspaceRoot, contextLines);
+        tabs.setSelectedComponent(searchTable);
     }
 
     /**
@@ -159,6 +246,10 @@ public final class EditorTabManager {
     public boolean closeActive() {
         if (tabs.getSelectedComponent() == diffViewer) {
             closeDiffTab();
+            return true;
+        }
+        if (tabs.getSelectedComponent() == searchTable) {
+            closeSearchTable();
             return true;
         }
         CodeEditorPane editor = getActiveEditor();
@@ -233,10 +324,16 @@ public final class EditorTabManager {
 
     private void showTabMenu(Component invoker, int x, int y, int index) {
         Component component = tabs.getComponentAt(index);
-        if (component == diffViewer) {
+        if (component == diffViewer || component == searchTable) {
             JPopupMenu menu = new JPopupMenu();
             JMenuItem close = new JMenuItem("閉じる");
-            close.addActionListener(e -> closeDiffTab());
+            close.addActionListener(e -> {
+                if (component == diffViewer) {
+                    closeDiffTab();
+                } else {
+                    closeSearchTable();
+                }
+            });
             menu.add(close);
             menu.show(invoker, x, y);
             return;
@@ -314,6 +411,17 @@ public final class EditorTabManager {
         diffViewer.clear();
     }
 
+    private void closeSearchTable() {
+        if (searchTable == null) {
+            return;
+        }
+        int index = tabs.indexOfComponent(searchTable);
+        if (index >= 0) {
+            tabs.remove(index);
+        }
+        searchTable.setMatches(java.util.List.of(), null, 0);
+    }
+
     private boolean closeEditor(CodeEditorPane editor) {
         if (!editor.isVirtual() && editor.isDirty()) {
             int choice = JOptionPane.showConfirmDialog(
@@ -336,6 +444,9 @@ public final class EditorTabManager {
         }
         tabs.remove(editor.getComponent());
         openEditors.remove(editor.getFile());
+        if (editor == preview) {
+            preview = null;
+        }
         return true;
     }
 
@@ -361,6 +472,7 @@ public final class EditorTabManager {
             }
         }
         closeDiffTab();
+        closeSearchTable();
     }
 
     private void closeToTheRight(int fromIndex) {
@@ -404,11 +516,15 @@ public final class EditorTabManager {
         Component header = tabs.getTabComponentAt(index);
         if (header instanceof TabHeader tabHeader) {
             tabHeader.setTitle(title);
+            CodeEditorPane editor = findByComponent(tabs.getComponentAt(index));
+            tabHeader.setPreview(editor != null && editor == preview);
         } else if (header == null) {
             Component content = tabs.getComponentAt(index);
             Runnable closer;
             if (content == diffViewer) {
                 closer = this::closeDiffTab;
+            } else if (content == searchTable) {
+                closer = this::closeSearchTable;
             } else {
                 CodeEditorPane editor = findByComponent(content);
                 closer = editor == null ? () -> {
@@ -450,6 +566,14 @@ public final class EditorTabManager {
 
         void setTitle(String title) {
             titleLabel.setText(title);
+        }
+
+        void setPreview(boolean preview) {
+            Font base = titleLabel.getFont();
+            if (base != null) {
+                titleLabel.setFont(base.deriveFont(preview ? Font.ITALIC : Font.PLAIN));
+            }
+            titleLabel.setToolTipText(preview ? "シングルクリックで置き換わります" : null);
         }
     }
 

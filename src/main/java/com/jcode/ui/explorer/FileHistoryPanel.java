@@ -4,6 +4,7 @@ import com.jcode.model.DiffTexts;
 import com.jcode.model.GitCommitEntry;
 import com.jcode.service.GitService;
 import com.jcode.ui.PathEllipsis;
+import com.jcode.ui.RowSelection;
 import com.jcode.ui.UiFonts;
 
 import javax.swing.BorderFactory;
@@ -58,6 +59,7 @@ public final class FileHistoryPanel extends JPanel {
         setMinimumSize(new java.awt.Dimension(220, 120));
 
         list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+        RowSelection.install(list);
         list.setFont(UiFonts.ui(12f));
         list.setFixedCellHeight(40);
         list.setCellRenderer(new DefaultListCellRenderer() {

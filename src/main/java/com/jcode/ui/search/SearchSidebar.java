@@ -52,11 +52,13 @@ import java.util.function.Supplier;
 
 /**
  * Workspace-wide search sidebar (VSCode Search view).
- * File rows: {@code filename   path…   hits}
+ * Results can be shown as a text tree or a flat table.
  */
 public final class SearchSidebar extends JPanel {
 
     private static final int PATH_MAX = 36;
+    private static final String VIEW_TEXT = "テキスト";
+    private static final String VIEW_TABLE = "テーブル";
 
     private final DefaultComboBoxModel<String> historyModel = new DefaultComboBoxModel<>();
     private final DefaultComboBoxModel<String> includeHistoryModel = new DefaultComboBoxModel<>();
@@ -73,7 +75,11 @@ public final class SearchSidebar extends JPanel {
     private final JLabel summary = new JLabel(" ");
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("results");
     private final DefaultTreeModel treeModel = new DefaultTreeModel(rootNode);
-    private final JTree results = new JTree(treeModel);
+    private final JTree resultsTree = new JTree(treeModel);
+    private final JComboBox<String> viewMode = new JComboBox<>(new String[]{VIEW_TEXT, VIEW_TABLE});
+    private final JButton collapseAllBtn = new JButton("全て折りたたむ");
+    private final JButton expandAllBtn = new JButton("全て展開");
+    private final JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
     private final JButton openInEditorBtn = new JButton("エディタで開く");
     private final JButton replaceAllBtn = new JButton("すべて置換");
     private final Supplier<Path> workspaceRoot;
@@ -81,6 +87,8 @@ public final class SearchSidebar extends JPanel {
     private BiConsumer<Path, SearchMatch> onOpenMatch = (p, m) -> {
     };
     private Consumer<SearchEditorRequest> onOpenInEditor = r -> {
+    };
+    private Consumer<SearchTableRequest> onOpenTable = r -> {
     };
     private Consumer<ReplaceResult> onReplaced = r -> {
     };
@@ -90,6 +98,7 @@ public final class SearchSidebar extends JPanel {
     }
 
     private List<SearchFileGroup> lastGroups = List.of();
+    private List<SearchMatch> flatMatches = List.of();
     private String lastQuery = "";
     /** Incremented on each search; stale SwingWorkers ignore their done(). */
     private int searchGeneration;
@@ -105,7 +114,7 @@ public final class SearchSidebar extends JPanel {
         wholeWord.setToolTipText("単語単位で一致");
         regex.setToolTipText("正規表現で検索");
         openFileOnly.setToolTipText("エディタで選択中のファイルだけを検索（未保存の内容も対象）。Include / Exclude も適用");
-        contextSpinner.setToolTipText("エディタ表示時の前後行数 (±N)。サイドバーには出ません");
+        contextSpinner.setToolTipText("右側に開くときの前後行数 (±N)。テキストとテーブルの両方に適用");
         ((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField().setColumns(2);
 
         queryField.setEditable(true);
@@ -144,8 +153,6 @@ public final class SearchSidebar extends JPanel {
         replaceAllBtn.addActionListener(e -> runReplaceAll());
         equalizeButtonWidth(searchBtn, replaceAllBtn);
 
-        JButton collapseAllBtn = new JButton("全て折りたたむ");
-        JButton expandAllBtn = new JButton("全て展開");
         collapseAllBtn.setToolTipText("検索結果をすべて折りたたむ");
         expandAllBtn.setToolTipText("検索結果をすべて展開する");
         collapseAllBtn.addActionListener(e -> collapseAll());
@@ -167,16 +174,20 @@ public final class SearchSidebar extends JPanel {
         JPanel excludeRow = labeledRow(excludeLabel, excludeField);
 
         openInEditorBtn.setEnabled(false);
-        openInEditorBtn.setToolTipText("検索結果をコピー可能なテキストとしてエディタに開く（前後 N 行を反映）");
+        openInEditorBtn.setToolTipText("検索結果を右側に開く");
         openInEditorBtn.addActionListener(e -> openResultsInEditor());
+
+        viewMode.setToolTipText("右側に開くときの形式");
+        viewMode.addActionListener(e -> updateOpenFormat());
 
         JPanel editorActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         editorActions.add(new JLabel("前後"));
         editorActions.add(contextSpinner);
         editorActions.add(new JLabel("行"));
+        editorActions.add(new JLabel("表示"));
+        editorActions.add(viewMode);
         editorActions.add(openInEditorBtn);
 
-        JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
         foldBtns.add(expandAllBtn);
         foldBtns.add(collapseAllBtn);
 
@@ -207,18 +218,47 @@ public final class SearchSidebar extends JPanel {
         north.add(titleRow, BorderLayout.NORTH);
         north.add(fields, BorderLayout.CENTER);
 
-        results.setRootVisible(false);
-        results.setShowsRootHandles(true);
-        results.setRowHeight(0);
-        results.setCellRenderer(new ResultTreeRenderer());
-        results.addComponentListener(new java.awt.event.ComponentAdapter() {
+        setupResultsTree();
+
+        // Enter in the editor, or choosing a history item
+        queryField.addActionListener(e -> runSearch());
+
+        JPanel summaryRow = new JPanel(new BorderLayout(4, 0));
+        summaryRow.add(summary, BorderLayout.CENTER);
+        summaryRow.add(foldBtns, BorderLayout.EAST);
+
+        JPanel resultsArea = new JPanel(new BorderLayout(0, 4));
+        resultsArea.add(summaryRow, BorderLayout.NORTH);
+        resultsArea.add(new JScrollPane(resultsTree), BorderLayout.CENTER);
+
+        add(north, BorderLayout.NORTH);
+        add(resultsArea, BorderLayout.CENTER);
+        updateOpenFormat();
+    }
+
+    private boolean isTableView() {
+        return VIEW_TABLE.equals(viewMode.getSelectedItem());
+    }
+
+    private void updateOpenFormat() {
+        openInEditorBtn.setToolTipText(isTableView()
+                ? "検索結果をテーブルとして右側に開く（前後 N 行。● がヒット行）"
+                : "検索結果をテキストとして右側に開く（前後 N 行）");
+    }
+
+    private void setupResultsTree() {
+        resultsTree.setRootVisible(false);
+        resultsTree.setShowsRootHandles(true);
+        resultsTree.setRowHeight(0);
+        resultsTree.setCellRenderer(new ResultTreeRenderer());
+        resultsTree.addComponentListener(new java.awt.event.ComponentAdapter() {
             @Override
             public void componentResized(java.awt.event.ComponentEvent e) {
-                results.repaint();
+                resultsTree.repaint();
             }
         });
-        results.addTreeSelectionListener(e -> {
-            Object last = results.getLastSelectedPathComponent();
+        resultsTree.addTreeSelectionListener(e -> {
+            Object last = resultsTree.getLastSelectedPathComponent();
             if (!(last instanceof DefaultMutableTreeNode node)) {
                 return;
             }
@@ -230,21 +270,7 @@ public final class SearchSidebar extends JPanel {
                 onOpenMatch.accept(first.file(), first);
             }
         });
-        ClipboardPaths.install(results, this::selectedResultPath);
-
-        // Enter in the editor, or choosing a history item
-        queryField.addActionListener(e -> runSearch());
-
-        JPanel summaryRow = new JPanel(new BorderLayout(4, 0));
-        summaryRow.add(summary, BorderLayout.CENTER);
-        summaryRow.add(foldBtns, BorderLayout.EAST);
-
-        JPanel resultsArea = new JPanel(new BorderLayout(0, 4));
-        resultsArea.add(summaryRow, BorderLayout.NORTH);
-        resultsArea.add(new JScrollPane(results), BorderLayout.CENTER);
-
-        add(north, BorderLayout.NORTH);
-        add(resultsArea, BorderLayout.CENTER);
+        ClipboardPaths.install(resultsTree, this::selectedResultPath);
     }
 
     public void setOnOpenMatch(BiConsumer<Path, SearchMatch> onOpenMatch) {
@@ -273,6 +299,11 @@ public final class SearchSidebar extends JPanel {
 
     public void setOnOpenInEditor(Consumer<SearchEditorRequest> onOpenInEditor) {
         this.onOpenInEditor = onOpenInEditor;
+    }
+
+    public void setOnOpenTable(Consumer<SearchTableRequest> onOpenTable) {
+        this.onOpenTable = onOpenTable != null ? onOpenTable : r -> {
+        };
     }
 
     public void setOnReplaced(Consumer<ReplaceResult> onReplaced) {
@@ -418,7 +449,7 @@ public final class SearchSidebar extends JPanel {
                     List<SearchFileGroup> groups = get();
                     lastGroups = groups;
                     lastQuery = query;
-                    rebuildTree(groups);
+                    showResults(groups);
                     int hits = groups.stream().mapToInt(SearchFileGroup::hitCount).sum();
                     summary.setText(groups.size() + " ファイル · " + hits + " 件");
                     openInEditorBtn.setEnabled(!groups.isEmpty());
@@ -509,9 +540,13 @@ public final class SearchSidebar extends JPanel {
         if (lastGroups.isEmpty()) {
             return;
         }
-        int context = (Integer) contextSpinner.getValue();
-        String report = SearchReportBuilder.build(lastQuery, workspaceRoot.get(), lastGroups, context);
         String title = "Search: " + (lastQuery.isBlank() ? "(empty)" : truncateLine(lastQuery, 40));
+        int context = (Integer) contextSpinner.getValue();
+        if (isTableView()) {
+            onOpenTable.accept(new SearchTableRequest(title, flatMatches, context));
+            return;
+        }
+        String report = SearchReportBuilder.build(lastQuery, workspaceRoot.get(), lastGroups, context);
         onOpenInEditor.accept(new SearchEditorRequest(
                 title,
                 report,
@@ -520,6 +555,11 @@ public final class SearchSidebar extends JPanel {
                 wholeWord.isSelected(),
                 regex.isSelected()
         ));
+    }
+
+    private void showResults(List<SearchFileGroup> groups) {
+        rebuildTree(groups);
+        flatMatches = flattenMatches(groups);
     }
 
     private void rebuildTree(List<SearchFileGroup> groups) {
@@ -542,6 +582,7 @@ public final class SearchSidebar extends JPanel {
 
     private void clearResultsKeepingHistory() {
         lastGroups = List.of();
+        flatMatches = List.of();
         lastQuery = "";
         openInEditorBtn.setEnabled(false);
         replaceAllBtn.setEnabled(false);
@@ -550,15 +591,23 @@ public final class SearchSidebar extends JPanel {
     }
 
     private void expandAll() {
-        for (int i = 0; i < results.getRowCount(); i++) {
-            results.expandRow(i);
+        for (int i = 0; i < resultsTree.getRowCount(); i++) {
+            resultsTree.expandRow(i);
         }
     }
 
     private void collapseAll() {
-        for (int i = results.getRowCount() - 1; i >= 0; i--) {
-            results.collapseRow(i);
+        for (int i = resultsTree.getRowCount() - 1; i >= 0; i--) {
+            resultsTree.collapseRow(i);
         }
+    }
+
+    private static List<SearchMatch> flattenMatches(List<SearchFileGroup> groups) {
+        List<SearchMatch> flat = new ArrayList<>();
+        for (SearchFileGroup group : groups) {
+            flat.addAll(group.matches());
+        }
+        return List.copyOf(flat);
     }
 
     private static List<SearchFileGroup> groupByFile(List<SearchMatch> matches) {
@@ -579,6 +628,9 @@ public final class SearchSidebar extends JPanel {
             boolean wholeWord,
             boolean regex
     ) {
+    }
+
+    public record SearchTableRequest(String title, List<SearchMatch> matches, int contextLines) {
     }
 
     private final class ResultTreeRenderer extends DefaultTreeCellRenderer {
@@ -847,7 +899,7 @@ public final class SearchSidebar extends JPanel {
     }
 
     private Path selectedResultPath() {
-        Object last = results.getLastSelectedPathComponent();
+        Object last = resultsTree.getLastSelectedPathComponent();
         if (!(last instanceof DefaultMutableTreeNode node)) {
             return null;
         }

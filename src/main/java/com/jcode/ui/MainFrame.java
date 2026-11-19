@@ -6,6 +6,7 @@ import com.jcode.service.RecentItems;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.ui.editor.CodeEditorPane;
 import com.jcode.ui.editor.EditorTabManager;
+import com.jcode.ui.editor.JavaOutlinePanel;
 import com.jcode.ui.explorer.FileHistoryPanel;
 import com.jcode.ui.explorer.FileTreePanel;
 import com.jcode.ui.explorer.QuickOpenDialog;
@@ -48,16 +49,21 @@ public final class MainFrame extends JFrame {
     private final SearchSidebar searchSidebar = new SearchSidebar(this::getWorkspaceRoot);
     private final GitPanel gitPanel = new GitPanel();
     private final FileHistoryPanel fileHistoryPanel = new FileHistoryPanel();
+    private final JavaOutlinePanel javaOutlinePanel = new JavaOutlinePanel();
     private final FindReplaceBar findReplaceBar = new FindReplaceBar(editors::getActiveEditor);
     private final StatusBar statusBar = new StatusBar();
     private final JTabbedPane activityBar = new JTabbedPane(JTabbedPane.TOP);
+    private final Timer outlineTimer = new Timer(300, e -> refreshOutline());
     private JSplitPane editorSplit;
+    private JSplitPane sideSplit;
     private boolean fileHistoryVisible;
 
     /** Default activity-bar width; Git uses 3/5 of the window (1:1:1:2 with editor). */
     private static final int SIDEBAR_WIDTH = 420;
     /** Git columns + editor = 1+1+1+2 → left pane is 3/5 of the frame. */
     private static final double GIT_SIDEBAR_RATIO = 0.6;
+    /** Explorer : editor : outline = 1 : 2 : 1 → left pane is 1/4 of the frame. */
+    private static final double EXPLORER_SIDEBAR_RATIO = 0.25;
 
     private Path workspaceRoot;
     private GitService gitService;
@@ -139,17 +145,33 @@ public final class MainFrame extends JFrame {
 
         fileHistoryPanel.setOnShowDiff(texts -> editors.showGitDiff(texts, false));
         fileHistoryPanel.setOnClose(this::hideFileHistoryPanel);
+        javaOutlinePanel.setOnJump(line -> {
+            CodeEditorPane editor = editors.getActiveEditor();
+            if (editor != null && !editor.isVirtual()) {
+                editor.goTo(line, 1);
+            }
+        });
+        outlineTimer.setRepeats(false);
+
+        sideSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, javaOutlinePanel, null);
+        sideSplit.setResizeWeight(1.0);
+        sideSplit.setDividerSize(0);
+        sideSplit.setContinuousLayout(true);
 
         editorSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, editorArea, null);
         editorSplit.setResizeWeight(1.0);
         editorSplit.setDividerSize(0);
         editorSplit.setContinuousLayout(true);
+        javax.swing.SwingUtilities.invokeLater(this::applyRightPane);
 
         mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorSplit);
         mainSplit.setResizeWeight(0.28);
         mainSplit.setDividerLocation(SIDEBAR_WIDTH);
 
-        activityBar.addChangeListener(e -> syncSidebarWidthForActivityTab());
+        activityBar.addChangeListener(e -> {
+            syncSidebarWidthForActivityTab();
+            applyRightPane();
+        });
 
         JPanel root = new JPanel(new BorderLayout());
         root.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
@@ -171,9 +193,35 @@ public final class MainFrame extends JFrame {
         } else if (gitOpen) {
             applyGitColumnRatios();
         } else if (gitSidebarActive) {
-            mainSplit.setDividerLocation(sidebarWidthBeforeGit);
             gitSidebarActive = false;
+            if (explorerOpen()) {
+                applyExplorerColumnRatios();
+            } else {
+                mainSplit.setDividerLocation(sidebarWidthBeforeGit);
+            }
+        } else if (explorerOpen()) {
+            applyExplorerColumnRatios();
         }
+    }
+
+    /** Explorer : editor : outline = 1 : 2 : 1. */
+    private void applyExplorerColumnRatios() {
+        if (mainSplit == null || !explorerOpen()) {
+            return;
+        }
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            if (!explorerOpen()) {
+                return;
+            }
+            int total = mainSplit.getWidth();
+            if (total <= 0) {
+                javax.swing.SwingUtilities.invokeLater(this::applyExplorerColumnRatios);
+                return;
+            }
+            mainSplit.setResizeWeight(EXPLORER_SIDEBAR_RATIO);
+            mainSplit.setDividerLocation((int) Math.round(total * EXPLORER_SIDEBAR_RATIO));
+            javax.swing.SwingUtilities.invokeLater(this::balanceOutlineSplit);
+        });
     }
 
     /** CHANGES : HISTORY : FILES : editor = 1 : 1 : 1 : 3 */
@@ -283,7 +331,8 @@ public final class MainFrame extends JFrame {
             }
         });
 
-        fileTree.setOnOpenFile(this::openFile);
+        fileTree.setOnOpenFile(this::openFileInSameTab);
+        fileTree.setOnOpenInNewTab(this::openFile);
         fileTree.setOnShowFileHistory(this::showFileHistory);
         searchSidebar.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
@@ -321,6 +370,11 @@ public final class MainFrame extends JFrame {
                         "エディタで開く", JOptionPane.ERROR_MESSAGE);
             }
         });
+        searchSidebar.setOnOpenTable(request -> {
+            editors.showSearchResultsTable(
+                    request.title(), request.matches(), workspaceRoot, request.contextLines());
+            statusBar.setLeft("検索結果をテーブルで表示");
+        });
         searchSidebar.setOnReplaced(result -> {
             editors.reloadFromDisk(result.changedFiles());
             fileTree.refresh();
@@ -356,7 +410,9 @@ public final class MainFrame extends JFrame {
                 fileTree.reveal(file);
                 syncFileHistoryWithEditor(file);
             }
+            refreshOutline();
         });
+        editors.setOnTextChanged(editor -> outlineTimer.restart());
     }
 
     private void openFolder() {
@@ -388,8 +444,19 @@ public final class MainFrame extends JFrame {
     }
 
     private void openFile(Path path) {
+        openEditor(path, false);
+    }
+
+    private void openFileInSameTab(Path path) {
+        openEditor(path, true);
+    }
+
+    private void openEditor(Path path, boolean sameTab) {
         try {
-            editors.open(path);
+            CodeEditorPane opened = sameTab ? editors.openInPreview(path) : editors.open(path);
+            if (opened == null) {
+                return;
+            }
             RecentItems.rememberFile(path);
             refreshRecentMenu();
             statusBar.setLeft("Opened " + path.getFileName());
@@ -422,12 +489,8 @@ public final class MainFrame extends JFrame {
 
     private void showFileHistoryPanel(Path path) {
         fileHistoryPanel.showFile(gitService, path, true);
-        if (!fileHistoryVisible) {
-            editorSplit.setRightComponent(fileHistoryPanel);
-            editorSplit.setDividerSize(6);
-            fileHistoryVisible = true;
-        }
-        javax.swing.SwingUtilities.invokeLater(this::balanceFileHistorySplit);
+        fileHistoryVisible = true;
+        applyRightPane();
     }
 
     /** While the history panel is open, follow the active editor file (list only, no auto-diff). */
@@ -446,27 +509,99 @@ public final class MainFrame extends JFrame {
         fileHistoryPanel.showFile(gitService, path, false);
     }
 
-    private void balanceFileHistorySplit() {
-        if (!fileHistoryVisible || editorSplit == null) {
+    private boolean explorerOpen() {
+        return activityBar.getSelectedComponent() == fileTree;
+    }
+
+    /** Outline only while Explorer is selected. History stays if it was opened. */
+    private void applyRightPane() {
+        if (editorSplit == null) {
+            return;
+        }
+        boolean showOutline = explorerOpen();
+        if (!showOutline && !fileHistoryVisible) {
+            editorSplit.setRightComponent(null);
+            editorSplit.setDividerSize(0);
+            editorSplit.setDividerLocation(1.0);
+            return;
+        }
+        editorSplit.setDividerSize(6);
+        if (showOutline && fileHistoryVisible) {
+            sideSplit.setTopComponent(javaOutlinePanel);
+            sideSplit.setBottomComponent(fileHistoryPanel);
+            sideSplit.setDividerSize(6);
+            editorSplit.setResizeWeight(2.0 / 3.0);
+            editorSplit.setRightComponent(sideSplit);
+            javax.swing.SwingUtilities.invokeLater(() -> {
+                applyExplorerColumnRatios();
+                balanceFileHistorySplit();
+            });
+            return;
+        }
+        if (showOutline) {
+            editorSplit.setResizeWeight(2.0 / 3.0);
+            editorSplit.setRightComponent(javaOutlinePanel);
+            javax.swing.SwingUtilities.invokeLater(this::applyExplorerColumnRatios);
+            return;
+        }
+        editorSplit.setResizeWeight(1.0);
+        editorSplit.setRightComponent(fileHistoryPanel);
+        javax.swing.SwingUtilities.invokeLater(this::balanceOutlineSplit);
+    }
+
+    private void balanceOutlineSplit() {
+        if (editorSplit == null || editorSplit.getRightComponent() == null) {
             return;
         }
         int total = editorSplit.getWidth();
         if (total <= 0) {
+            javax.swing.SwingUtilities.invokeLater(this::balanceOutlineSplit);
+            return;
+        }
+        if (explorerOpen()) {
+            // Right pane is editor+outline = 3 parts; outline is 1 of those.
+            editorSplit.setDividerLocation(2.0 / 3.0);
+            return;
+        }
+        int sideWidth = Math.min(360, Math.max(260, total / 4));
+        editorSplit.setDividerLocation(total - sideWidth);
+    }
+
+    private void balanceFileHistorySplit() {
+        if (!fileHistoryVisible || sideSplit == null) {
+            return;
+        }
+        int total = sideSplit.getHeight();
+        if (total <= 0) {
             javax.swing.SwingUtilities.invokeLater(this::balanceFileHistorySplit);
             return;
         }
-        int historyWidth = Math.min(360, Math.max(260, total / 4));
-        editorSplit.setDividerLocation(total - historyWidth);
+        sideSplit.setDividerLocation(Math.max(120, total / 2));
     }
 
     private void hideFileHistoryPanel() {
         fileHistoryVisible = false;
         fileHistoryPanel.clear();
-        if (editorSplit != null) {
-            editorSplit.setRightComponent(null);
-            editorSplit.setDividerSize(0);
-            editorSplit.setDividerLocation(1.0);
+        if (sideSplit != null) {
+            sideSplit.setBottomComponent(null);
+            sideSplit.setDividerSize(0);
         }
+        applyRightPane();
+    }
+
+    private void refreshOutline() {
+        CodeEditorPane editor = editors.getActiveEditor();
+        if (editor == null || editor.isVirtual()) {
+            javaOutlinePanel.showMessage("ファイルを開いてください");
+            return;
+        }
+        Path file = editor.getFile();
+        String name = file.getFileName() == null ? "" : file.getFileName().toString();
+        if (!name.toLowerCase(java.util.Locale.ROOT).endsWith(".java")) {
+            javaOutlinePanel.showMessage("Java ファイルではありません");
+            return;
+        }
+        javaOutlinePanel.showSource(name, editor.getText());
     }
 
     private void openInExternalEditor() {

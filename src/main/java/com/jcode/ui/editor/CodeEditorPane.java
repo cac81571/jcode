@@ -1,6 +1,7 @@
 package com.jcode.ui.editor;
 
 import com.jcode.service.SearchService;
+import com.jcode.ui.RowSelection;
 import com.jcode.ui.ThemeManager;
 import com.jcode.ui.UiFonts;
 import org.fife.ui.rsyntaxtextarea.RSyntaxTextArea;
@@ -35,6 +36,9 @@ public final class CodeEditorPane {
     private String lastSavedText;
     private final List<Object> matchHighlights = new ArrayList<>();
     private final List<Object> lineHighlights = new ArrayList<>();
+    private Object jumpHighlight;
+    private Runnable onTextChanged = () -> {
+    };
 
     public CodeEditorPane(Path file) throws IOException {
         this(file, null, Files.exists(file) ? readFileText(file) : "",
@@ -70,16 +74,21 @@ public final class CodeEditorPane {
                 @Override
                 public void insertUpdate(javax.swing.event.DocumentEvent e) {
                     markDirty();
+                    clearJumpHighlight();
+                    onTextChanged.run();
                 }
 
                 @Override
                 public void removeUpdate(javax.swing.event.DocumentEvent e) {
                     markDirty();
+                    clearJumpHighlight();
+                    onTextChanged.run();
                 }
 
                 @Override
                 public void changedUpdate(javax.swing.event.DocumentEvent e) {
                     markDirty();
+                    onTextChanged.run();
                 }
             });
         }
@@ -87,6 +96,11 @@ public final class CodeEditorPane {
         this.scrollPane = new RTextScrollPane(textArea);
         scrollPane.setLineNumbersEnabled(true);
         scrollPane.setFoldIndicatorEnabled(!virtual);
+    }
+
+    public void setOnTextChanged(Runnable onTextChanged) {
+        this.onTextChanged = onTextChanged != null ? onTextChanged : () -> {
+        };
     }
 
     public Path getFile() {
@@ -258,12 +272,40 @@ public final class CodeEditorPane {
 
     public void goTo(int line, int column) {
         try {
-            int offset = textArea.getLineStartOffset(Math.max(0, line - 1)) + Math.max(0, column - 1);
+            int lineIndex = Math.max(0, line - 1);
+            int offset = textArea.getLineStartOffset(lineIndex) + Math.max(0, column - 1);
             textArea.setCaretPosition(Math.min(offset, textArea.getDocument().getLength()));
+            markJumpLine(lineIndex);
+            java.awt.Rectangle row = textArea.modelToView(textArea.getLineStartOffset(lineIndex));
+            if (row != null) {
+                java.awt.Rectangle visible = textArea.getVisibleRect();
+                row.y = Math.max(0, row.y - visible.height / 3);
+                row.height = visible.height / 2;
+                textArea.scrollRectToVisible(row);
+            }
             textArea.requestFocusInWindow();
         } catch (Exception ignored) {
             // out of range
         }
+    }
+
+    private void markJumpLine(int zeroBasedLine) {
+        clearJumpHighlight();
+        boolean dark = ThemeManager.isDark();
+        Color color = dark ? new Color(214, 196, 150) : new Color(255, 248, 220);
+        try {
+            jumpHighlight = textArea.addLineHighlight(zeroBasedLine, color);
+        } catch (BadLocationException ignored) {
+            jumpHighlight = null;
+        }
+    }
+
+    private void clearJumpHighlight() {
+        if (jumpHighlight == null) {
+            return;
+        }
+        textArea.removeLineHighlight(jumpHighlight);
+        jumpHighlight = null;
     }
 
     public void highlightRange(int line, int startColumn, int endColumn) {
@@ -299,13 +341,10 @@ public final class CodeEditorPane {
             // keep default
         }
         textArea.setFont(UiFonts.mono(14f));
-        if (dark) {
-            textArea.setBackground(new Color(30, 30, 30));
-            textArea.setCurrentLineHighlightColor(new Color(40, 40, 40));
-        } else {
-            textArea.setBackground(new Color(255, 255, 255));
-            textArea.setCurrentLineHighlightColor(new Color(240, 240, 240));
-        }
+        textArea.setHighlightCurrentLine(true);
+        textArea.setFadeCurrentLineHighlight(false);
+        textArea.setBackground(dark ? new Color(30, 30, 30) : Color.WHITE);
+        textArea.setCurrentLineHighlightColor(dark ? new Color(32, 104, 136) : RowSelection.BACKGROUND);
     }
 
     private static String readFileText(Path file) throws IOException {

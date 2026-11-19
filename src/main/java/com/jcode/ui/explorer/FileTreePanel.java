@@ -3,6 +3,7 @@ package com.jcode.ui.explorer;
 import com.jcode.service.ExternalOpener;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.ui.ClipboardPaths;
+import com.jcode.ui.RowSelection;
 
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
@@ -12,12 +13,14 @@ import javax.swing.JScrollPane;
 import javax.swing.JTree;
 import javax.swing.KeyStroke;
 import javax.swing.SwingWorker;
+import javax.swing.Timer;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
+import java.awt.Toolkit;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -43,14 +46,19 @@ public final class FileTreePanel extends JPanel {
     private Path pendingReveal;
     private Consumer<Path> onOpenFile = p -> {
     };
+    private Consumer<Path> onOpenInNewTab = p -> {
+    };
     private Consumer<Path> onShowFileHistory = p -> {
     };
+    private final Timer openTimer = new Timer(multiClickInterval(), e -> openPending());
+    private Path pendingOpen;
 
     public FileTreePanel() {
         super(new BorderLayout());
         tree.setRootVisible(true);
         tree.setShowsRootHandles(true);
         tree.getSelectionModel().setSelectionMode(TreeSelectionModel.SINGLE_TREE_SELECTION);
+        openTimer.setRepeats(false);
         tree.setCellRenderer(new DefaultTreeCellRenderer() {
             @Override
             public java.awt.Component getTreeCellRendererComponent(
@@ -65,16 +73,29 @@ public final class FileTreePanel extends JPanel {
                 return this;
             }
         });
+        RowSelection.install(tree);
 
         tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) {
-                    Path file = selectedFile();
-                    if (file != null && Files.isRegularFile(file)) {
-                        onOpenFile.accept(file);
-                    }
+                if (e.getButton() != MouseEvent.BUTTON1 || e.isPopupTrigger()) {
+                    return;
                 }
+                TreePath path = tree.getPathForLocation(e.getX(), e.getY());
+                if (path != null) {
+                    tree.setSelectionPath(path);
+                }
+                Path file = selectedFile();
+                if (file == null || !Files.isRegularFile(file)) {
+                    return;
+                }
+                if (e.getClickCount() >= 2) {
+                    cancelPendingOpen();
+                    onOpenInNewTab.accept(file);
+                    return;
+                }
+                pendingOpen = file;
+                openTimer.restart();
             }
 
             @Override
@@ -117,7 +138,7 @@ public final class FileTreePanel extends JPanel {
 
         if (isFile) {
             JMenuItem open = new JMenuItem("開く");
-            open.addActionListener(e -> onOpenFile.accept(selected));
+            open.addActionListener(e -> onOpenInNewTab.accept(selected));
             menu.add(open);
         }
 
@@ -213,7 +234,34 @@ public final class FileTreePanel extends JPanel {
     }
 
     public void setOnOpenFile(Consumer<Path> onOpenFile) {
-        this.onOpenFile = onOpenFile;
+        this.onOpenFile = onOpenFile != null ? onOpenFile : p -> {
+        };
+    }
+
+    public void setOnOpenInNewTab(Consumer<Path> onOpenInNewTab) {
+        this.onOpenInNewTab = onOpenInNewTab != null ? onOpenInNewTab : p -> {
+        };
+    }
+
+    private void openPending() {
+        Path file = pendingOpen;
+        pendingOpen = null;
+        if (file != null) {
+            onOpenFile.accept(file);
+        }
+    }
+
+    private void cancelPendingOpen() {
+        openTimer.stop();
+        pendingOpen = null;
+    }
+
+    private static int multiClickInterval() {
+        Object value = Toolkit.getDefaultToolkit().getDesktopProperty("awt.multiClickInterval");
+        if (value instanceof Integer interval && interval > 0) {
+            return interval + 80;
+        }
+        return 480;
     }
 
     public void setOnShowFileHistory(Consumer<Path> onShowFileHistory) {
