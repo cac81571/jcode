@@ -39,7 +39,7 @@ public final class EditorTabManager {
     private final JTabbedPane tabs = new JTabbedPane();
     private final Map<Path, CodeEditorPane> openEditors = new HashMap<>();
     private DiffViewerPanel diffViewer;
-    private SearchResultsTablePanel searchTable;
+    private final Map<String, SearchResultsTablePanel> searchTables = new java.util.LinkedHashMap<>();
     private Consumer<CodeEditorPane> onActiveChanged = e -> {
     };
     private Consumer<CodeEditorPane> onTextChanged = e -> {
@@ -134,38 +134,39 @@ public final class EditorTabManager {
 
     /**
      * Shows search hits in a table tab in the editor area.
+     * {@code key} keeps one table per search; a new key opens another tab.
      */
     public void showSearchResultsTable(
+            String key,
             String title,
             java.util.List<SearchMatch> matches,
             java.nio.file.Path workspaceRoot,
             int contextLines
     ) {
-        if (searchTable == null) {
-            searchTable = new SearchResultsTablePanel();
-            tabs.addTab(title, searchTable);
-            int index = tabs.indexOfComponent(searchTable);
-            tabs.setTabComponentAt(index, createTabHeader(title, this::closeSearchTable));
+        String id = key == null || key.isBlank() ? "search" : key;
+        SearchResultsTablePanel panel = searchTables.get(id);
+        if (panel == null || tabs.indexOfComponent(panel) < 0) {
+            panel = new SearchResultsTablePanel();
+            searchTables.put(id, panel);
+            tabs.addTab(title, panel);
+            int index = tabs.indexOfComponent(panel);
+            SearchResultsTablePanel closing = panel;
+            tabs.setTabComponentAt(index, createTabHeader(title, () -> closeSearchTable(closing)));
         } else {
-            int index = tabs.indexOfComponent(searchTable);
-            if (index < 0) {
-                tabs.addTab(title, searchTable);
-                index = tabs.indexOfComponent(searchTable);
-                tabs.setTabComponentAt(index, createTabHeader(title, this::closeSearchTable));
-            } else {
-                updateTabHeaderTitle(index, title);
-            }
+            updateTabHeaderTitle(tabs.indexOfComponent(panel), title);
         }
-        searchTable.setMatches(matches, workspaceRoot, contextLines);
-        tabs.setSelectedComponent(searchTable);
+        panel.setMatches(matches, workspaceRoot, contextLines);
+        tabs.setSelectedComponent(panel);
     }
 
     /**
      * Opens (or refreshes) a virtual text tab (copyable), e.g. Search Results.
-     * Uses a fixed key so Windows path-illegal characters in {@code title} are fine.
+     * {@code keyName} is a stable id so each search keeps its own tab.
      */
-    public CodeEditorPane openVirtual(String title, String content) {
-        Path key = Path.of(System.getProperty("java.io.tmpdir"), "jcode-virtual", "search-results.txt");
+    public CodeEditorPane openVirtual(String title, String content, String keyName) {
+        String safe = keyName == null || keyName.isBlank() ? "search-results" : keyName;
+        safe = safe.replaceAll("[^A-Za-z0-9._-]", "_");
+        Path key = Path.of(System.getProperty("java.io.tmpdir"), "jcode-virtual", safe + ".txt");
         CodeEditorPane existing = openEditors.get(key);
         if (existing != null) {
             existing.replaceContent(content);
@@ -219,8 +220,8 @@ public final class EditorTabManager {
             closeDiffTab();
             return true;
         }
-        if (tabs.getSelectedComponent() == searchTable) {
-            closeSearchTable();
+        if (tabs.getSelectedComponent() instanceof SearchResultsTablePanel table) {
+            closeSearchTable(table);
             return true;
         }
         CodeEditorPane editor = getActiveEditor();
@@ -295,14 +296,14 @@ public final class EditorTabManager {
 
     private void showTabMenu(Component invoker, int x, int y, int index) {
         Component component = tabs.getComponentAt(index);
-        if (component == diffViewer || component == searchTable) {
+        if (component == diffViewer || component instanceof SearchResultsTablePanel) {
             JPopupMenu menu = new JPopupMenu();
             JMenuItem close = new JMenuItem("閉じる");
             close.addActionListener(e -> {
                 if (component == diffViewer) {
                     closeDiffTab();
                 } else {
-                    closeSearchTable();
+                    closeSearchTable((SearchResultsTablePanel) component);
                 }
             });
             menu.add(close);
@@ -382,15 +383,16 @@ public final class EditorTabManager {
         diffViewer.clear();
     }
 
-    private void closeSearchTable() {
-        if (searchTable == null) {
+    private void closeSearchTable(SearchResultsTablePanel panel) {
+        if (panel == null) {
             return;
         }
-        int index = tabs.indexOfComponent(searchTable);
+        int index = tabs.indexOfComponent(panel);
         if (index >= 0) {
             tabs.remove(index);
         }
-        searchTable.setMatches(java.util.List.of(), null, 0);
+        searchTables.values().remove(panel);
+        panel.setMatches(java.util.List.of(), null, 0);
     }
 
     private boolean closeEditor(CodeEditorPane editor) {
@@ -440,7 +442,9 @@ public final class EditorTabManager {
             }
         }
         closeDiffTab();
-        closeSearchTable();
+        for (SearchResultsTablePanel panel : List.copyOf(searchTables.values())) {
+            closeSearchTable(panel);
+        }
     }
 
     private void closeToTheRight(int fromIndex) {
@@ -489,8 +493,8 @@ public final class EditorTabManager {
             Runnable closer;
             if (content == diffViewer) {
                 closer = this::closeDiffTab;
-            } else if (content == searchTable) {
-                closer = this::closeSearchTable;
+            } else if (content instanceof SearchResultsTablePanel table) {
+                closer = () -> closeSearchTable(table);
             } else {
                 CodeEditorPane editor = findByComponent(content);
                 closer = editor == null ? () -> {

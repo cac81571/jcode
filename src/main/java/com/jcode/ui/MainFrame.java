@@ -14,6 +14,7 @@ import com.jcode.ui.explorer.QuickOpenDialog;
 import com.jcode.ui.git.GitPanel;
 import com.jcode.ui.search.FindReplaceBar;
 import com.jcode.ui.search.SearchSidebar;
+import com.jcode.ui.search.SearchTabs;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
@@ -48,7 +49,7 @@ public final class MainFrame extends JFrame {
 
     private final FileTreePanel fileTree = new FileTreePanel();
     private final EditorTabManager editors = new EditorTabManager();
-    private final SearchSidebar searchSidebar = new SearchSidebar(this::getWorkspaceRoot);
+    private final SearchTabs searchTabs = new SearchTabs(this::getWorkspaceRoot);
     private final GitPanel gitPanel = new GitPanel();
     private final FileHistoryPanel fileHistoryPanel = new FileHistoryPanel();
     private final JavaOutlinePanel javaOutlinePanel = new JavaOutlinePanel();
@@ -63,7 +64,10 @@ public final class MainFrame extends JFrame {
     private boolean fileHistoryVisible;
 
     /** Default activity-bar width; Git uses 3/5 of the window (1:1:1:2 with editor). */
-    private static final int SIDEBAR_WIDTH = 420;
+    private static final int SIDEBAR_WIDTH = 450;
+    /** Search widens to this when the left pane is narrower. */
+    private static final int SEARCH_SIDEBAR_MIN_WIDTH = 450;
+    private static final double DEFAULT_SIDEBAR_RESIZE_WEIGHT = 0.28;
     /** Git columns + editor = 1+1+1+2 → left pane is 3/5 of the frame. */
     private static final double GIT_SIDEBAR_RATIO = 0.6;
     /** Explorer : editor : outline = 1 : 2 : 1 → left pane is 1/4 of the frame. */
@@ -138,7 +142,7 @@ public final class MainFrame extends JFrame {
 
     private void buildLayout() {
         activityBar.addTab("エクスプローラー", fileTree);
-        activityBar.addTab("検索", searchSidebar);
+        activityBar.addTab("検索", searchTabs);
         activityBar.addTab("Git", gitPanel);
         activityBar.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 600));
         activityBar.setMinimumSize(new Dimension(280, 200));
@@ -169,7 +173,7 @@ public final class MainFrame extends JFrame {
         javax.swing.SwingUtilities.invokeLater(this::applyRightPane);
 
         mainSplit = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, activityBar, editorSplit);
-        mainSplit.setResizeWeight(0.28);
+        mainSplit.setResizeWeight(DEFAULT_SIDEBAR_RESIZE_WEIGHT);
         mainSplit.setDividerLocation(SIDEBAR_WIDTH);
 
         activityBar.addChangeListener(e -> {
@@ -202,10 +206,33 @@ public final class MainFrame extends JFrame {
                 applyExplorerColumnRatios();
             } else {
                 mainSplit.setDividerLocation(sidebarWidthBeforeGit);
+                if (searchOpen()) {
+                    ensureSearchSidebarWidth();
+                }
             }
         } else if (explorerOpen()) {
             applyExplorerColumnRatios();
+        } else if (searchOpen()) {
+            ensureSearchSidebarWidth();
         }
+    }
+
+    /** Explorer can leave the pane under 450. Opening Search brings it back up. */
+    private void ensureSearchSidebarWidth() {
+        mainSplit.setResizeWeight(DEFAULT_SIDEBAR_RESIZE_WEIGHT);
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            if (mainSplit == null || !searchOpen()) {
+                return;
+            }
+            mainSplit.setResizeWeight(DEFAULT_SIDEBAR_RESIZE_WEIGHT);
+            if (mainSplit.getDividerLocation() < SEARCH_SIDEBAR_MIN_WIDTH) {
+                mainSplit.setDividerLocation(SEARCH_SIDEBAR_MIN_WIDTH);
+            }
+        });
+    }
+
+    private boolean searchOpen() {
+        return activityBar.getSelectedComponent() == searchTabs;
     }
 
     /** Explorer : editor : outline = 1 : 2 : 1. */
@@ -266,15 +293,19 @@ public final class MainFrame extends JFrame {
         edit.add(item("検索", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showFind()));
         edit.add(item("置換", KeyStroke.getKeyStroke(KeyEvent.VK_H, InputEvent.CTRL_DOWN_MASK), e -> findReplaceBar.showReplace()));
         edit.add(item("ファイル横断検索", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
-            activityBar.setSelectedComponent(searchSidebar);
-            searchSidebar.focusSearch();
+            activityBar.setSelectedComponent(searchTabs);
+            searchTabs.focusSearch();
         }));
 
         JMenu view = new JMenu("表示");
         view.add(item("エクスプローラー", KeyStroke.getKeyStroke(KeyEvent.VK_E, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> activityBar.setSelectedComponent(fileTree)));
         view.add(item("検索", null, e -> {
-            activityBar.setSelectedComponent(searchSidebar);
-            searchSidebar.focusSearch();
+            activityBar.setSelectedComponent(searchTabs);
+            searchTabs.focusSearch();
+        }));
+        view.add(item("新しい検索", null, e -> {
+            activityBar.setSelectedComponent(searchTabs);
+            searchTabs.addSearch();
         }));
         view.add(item("ソース管理", KeyStroke.getKeyStroke(KeyEvent.VK_G, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
             activityBar.setSelectedComponent(gitPanel);
@@ -338,29 +369,30 @@ public final class MainFrame extends JFrame {
         fileTree.setOnOpenFile(this::openFile);
         fileTree.setOnPreviewFile(this::previewOutline);
         fileTree.setOnShowFileHistory(this::showFileHistory);
-        searchSidebar.setActiveFileSupplier(() -> {
+        searchTabs.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor == null || editor.isVirtual()) {
                 return null;
             }
             return new SearchSidebar.ActiveFile(editor.getFile(), editor.getText());
         });
-        searchSidebar.setOnOpenMatch((path, match) -> {
+        searchTabs.setOnOpenMatch((source, path, match) -> {
             openFile(path);
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor != null) {
                 editor.highlightAllMatches(
-                        searchSidebar.lastQuery(),
-                        searchSidebar.isMatchCase(),
-                        searchSidebar.isWholeWord(),
-                        searchSidebar.isRegex()
+                        source.lastQuery(),
+                        source.isMatchCase(),
+                        source.isWholeWord(),
+                        source.isRegex()
                 );
                 editor.highlightRange(match.lineNumber(), match.startColumn(), match.endColumn());
             }
         });
-        searchSidebar.setOnOpenInEditor(request -> {
+        searchTabs.setOnOpenInEditor(request -> {
             try {
-                CodeEditorPane pane = editors.openVirtual(request.title(), request.content());
+                CodeEditorPane pane = editors.openVirtual(
+                        request.title(), request.content(), "search-" + request.sessionKey());
                 pane.highlightSearchReport(
                         request.query(),
                         request.matchCase(),
@@ -374,12 +406,13 @@ public final class MainFrame extends JFrame {
                         "エディタで開く", JOptionPane.ERROR_MESSAGE);
             }
         });
-        searchSidebar.setOnOpenTable(request -> {
+        searchTabs.setOnOpenTable(request -> {
             editors.showSearchResultsTable(
+                    "search-" + request.sessionKey(),
                     request.title(), request.matches(), workspaceRoot, request.contextLines());
             statusBar.setLeft("検索結果をテーブルで表示");
         });
-        searchSidebar.setOnReplaced(result -> {
+        searchTabs.setOnReplaced(result -> {
             editors.reloadFromDisk(result.changedFiles());
             fileTree.refresh();
             gitPanel.refresh();

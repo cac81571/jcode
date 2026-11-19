@@ -46,6 +46,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -78,6 +79,8 @@ public final class SearchSidebar extends JPanel {
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("results");
     private final DefaultTreeModel treeModel = new DefaultTreeModel(rootNode);
     private final JTree resultsTree = new JTree(treeModel);
+    private final JButton searchBtn = new JButton("検索");
+    private final JButton cancelBtn = new JButton("キャンセル");
     private final JButton collapseAllBtn = new JButton("全て折りたたむ");
     private final JButton expandAllBtn = new JButton("全て展開");
     private final JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
@@ -102,8 +105,14 @@ public final class SearchSidebar extends JPanel {
     private List<SearchFileGroup> lastGroups = List.of();
     private List<SearchMatch> flatMatches = List.of();
     private String lastQuery = "";
+    /** Stable id so this search's editor/table tabs are not shared with other searches. */
+    private String sessionKey = "1";
+    private Consumer<String> onSearched = query -> {
+    };
     /** Incremented on each search; stale SwingWorkers ignore their done(). */
     private int searchGeneration;
+    private boolean searching;
+    private AtomicBoolean searchCancelled;
     /** Skip Include/Exclude auto-search while history models are updated. */
     private boolean suppressFilterAutoSearch;
 
@@ -155,19 +164,20 @@ public final class SearchSidebar extends JPanel {
         opts.add(regex);
 
         JPanel titleRow = new JPanel(new BorderLayout());
-        titleRow.add(new JLabel("SEARCH"), BorderLayout.WEST);
         titleRow.add(opts, BorderLayout.EAST);
 
         replaceField.putClientProperty("JTextField.placeholderText", "置換文字列");
         replaceField.setToolTipText("置換後の文字列");
 
-        JButton searchBtn = new JButton("検索");
         searchBtn.addActionListener(e -> runSearch());
+        cancelBtn.setVisible(false);
+        cancelBtn.setToolTipText("検索を中止");
+        cancelBtn.addActionListener(e -> cancelSearch());
 
         replaceAllBtn.setEnabled(false);
         replaceAllBtn.setToolTipText("検索結果のファイルすべてで置換（要確認）");
         replaceAllBtn.addActionListener(e -> runReplaceAll());
-        equalizeButtonWidth(searchBtn, replaceAllBtn);
+        equalizeSearchButtonWidth();
 
         collapseAllBtn.setToolTipText("検索結果をすべて折りたたむ");
         expandAllBtn.setToolTipText("検索結果をすべて展開する");
@@ -213,12 +223,9 @@ public final class SearchSidebar extends JPanel {
         JButton useHitFiles = new JButton("ヒットしたファイルを条件設定");
         useHitFiles.setToolTipText("ヒットしたファイルのパスを Include(file) にセットします");
         useHitFiles.addActionListener(e -> applyHitFilesAsInclude());
-        JPanel hitFileRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+        JPanel hitFileRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         hitFileRow.add(useHitFiles);
-
-        JPanel scopeRow = new JPanel(new BorderLayout(4, 0));
-        scopeRow.add(openFileOnly, BorderLayout.WEST);
-        scopeRow.add(editorActions, BorderLayout.EAST);
+        hitFileRow.add(openFileOnly);
 
         JPanel filterBlock = new JPanel();
         filterBlock.setLayout(new BoxLayout(filterBlock, BoxLayout.Y_AXIS));
@@ -227,7 +234,7 @@ public final class SearchSidebar extends JPanel {
         excludeFileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         excludeDirRow.setAlignmentX(Component.LEFT_ALIGNMENT);
         hitFileRow.setAlignmentX(Component.LEFT_ALIGNMENT);
-        scopeRow.setAlignmentX(Component.LEFT_ALIGNMENT);
+        editorActions.setAlignmentX(Component.LEFT_ALIGNMENT);
         filterBlock.add(includeFileRow);
         filterBlock.add(Box.createVerticalStrut(4));
         filterBlock.add(includeDirRow);
@@ -238,7 +245,7 @@ public final class SearchSidebar extends JPanel {
         filterBlock.add(Box.createVerticalStrut(4));
         filterBlock.add(hitFileRow);
         filterBlock.add(Box.createVerticalStrut(4));
-        filterBlock.add(scopeRow);
+        filterBlock.add(editorActions);
 
         JPanel mid = new JPanel(new BorderLayout(4, 4));
         mid.add(replaceRow, BorderLayout.NORTH);
@@ -257,8 +264,12 @@ public final class SearchSidebar extends JPanel {
         // Enter in the editor, or choosing a history item
         queryField.addActionListener(e -> runSearch());
 
+        JPanel summaryStatus = new JPanel(new BorderLayout(8, 0));
+        summaryStatus.add(summary, BorderLayout.CENTER);
+        summaryStatus.add(cancelBtn, BorderLayout.EAST);
+
         JPanel summaryRow = new JPanel(new BorderLayout(4, 0));
-        summaryRow.add(summary, BorderLayout.CENTER);
+        summaryRow.add(summaryStatus, BorderLayout.CENTER);
         summaryRow.add(foldBtns, BorderLayout.EAST);
 
         JPanel resultsArea = new JPanel(new BorderLayout(0, 4));
@@ -331,6 +342,22 @@ public final class SearchSidebar extends JPanel {
 
     public void setOnReplaced(Consumer<ReplaceResult> onReplaced) {
         this.onReplaced = onReplaced;
+    }
+
+    public void setSessionKey(String sessionKey) {
+        if (sessionKey != null && !sessionKey.isBlank()) {
+            this.sessionKey = sessionKey;
+        }
+    }
+
+    public String sessionKey() {
+        return sessionKey;
+    }
+
+    /** Fired with the query when a search starts, or with {@code ""} when the query is cleared. */
+    public void setOnSearched(Consumer<String> onSearched) {
+        this.onSearched = onSearched != null ? onSearched : query -> {
+        };
     }
 
     public void focusSearch() {
@@ -416,6 +443,7 @@ public final class SearchSidebar extends JPanel {
         if (query.isEmpty()) {
             clearResults();
             summary.setText(" ");
+            onSearched.accept("");
             return;
         }
 
@@ -458,8 +486,15 @@ public final class SearchSidebar extends JPanel {
             suppressFilterAutoSearch = false;
         }
 
+        if (searchCancelled != null) {
+            searchCancelled.set(true);
+        }
         final int generation = ++searchGeneration;
+        final AtomicBoolean cancelled = new AtomicBoolean();
+        searchCancelled = cancelled;
+        setSearching(true);
         summary.setText("検索中…");
+        onSearched.accept(query);
         clearResultsKeepingHistory();
         boolean mc = matchCase.isSelected();
         boolean ww = wholeWord.isSelected();
@@ -470,6 +505,9 @@ public final class SearchSidebar extends JPanel {
         new SwingWorker<List<SearchFileGroup>, Void>() {
             @Override
             protected List<SearchFileGroup> doInBackground() throws Exception {
+                if (cancelled.get()) {
+                    return List.of();
+                }
                 if (onlyOpen) {
                     Path filterRoot = searchRoot != null
                             ? searchRoot
@@ -483,12 +521,18 @@ public final class SearchSidebar extends JPanel {
                             target.text(), target.path(), query, mc, ww, rx));
                 }
                 return groupByFile(SearchService.findInWorkspace(
-                        searchRoot, query, mc, ww, rx, includeFiles, includeDirs, excludeFiles, excludeDirs));
+                        searchRoot, query, mc, ww, rx,
+                        includeFiles, includeDirs, excludeFiles, excludeDirs, cancelled::get));
             }
 
             @Override
             protected void done() {
                 if (generation != searchGeneration) {
+                    return;
+                }
+                setSearching(false);
+                if (cancelled.get()) {
+                    summary.setText("キャンセルしました");
                     return;
                 }
                 try {
@@ -510,6 +554,35 @@ public final class SearchSidebar extends JPanel {
                 }
             }
         }.execute();
+    }
+
+    private void cancelSearch() {
+        if (!searching) {
+            return;
+        }
+        if (searchCancelled != null) {
+            searchCancelled.set(true);
+        }
+        searchGeneration++;
+        setSearching(false);
+        summary.setText("キャンセルしました");
+    }
+
+    private void setSearching(boolean searching) {
+        this.searching = searching;
+        searchBtn.setEnabled(!searching);
+        cancelBtn.setVisible(searching);
+        cancelBtn.getParent().revalidate();
+    }
+
+    private void equalizeSearchButtonWidth() {
+        int width = Math.max(searchBtn.getPreferredSize().width, replaceAllBtn.getPreferredSize().width);
+        for (JButton button : List.of(searchBtn, replaceAllBtn)) {
+            Dimension size = button.getPreferredSize();
+            Dimension equal = new Dimension(width, size.height);
+            button.setPreferredSize(equal);
+            button.setMinimumSize(equal);
+        }
     }
 
     private void applyHitFilesAsInclude() {
@@ -630,7 +703,7 @@ public final class SearchSidebar extends JPanel {
         String title = "Search: " + (lastQuery.isBlank() ? "(empty)" : truncateLine(lastQuery, 40));
         int context = (Integer) contextSpinner.getValue();
         if (table) {
-            onOpenTable.accept(new SearchTableRequest(title, flatMatches, context));
+            onOpenTable.accept(new SearchTableRequest(title, flatMatches, context, sessionKey));
             return;
         }
         String report = SearchReportBuilder.build(lastQuery, workspaceRoot.get(), lastGroups, context);
@@ -640,7 +713,8 @@ public final class SearchSidebar extends JPanel {
                 lastQuery,
                 matchCase.isSelected(),
                 wholeWord.isSelected(),
-                regex.isSelected()
+                regex.isSelected(),
+                sessionKey
         ));
     }
 
@@ -713,11 +787,17 @@ public final class SearchSidebar extends JPanel {
             String query,
             boolean matchCase,
             boolean wholeWord,
-            boolean regex
+            boolean regex,
+            String sessionKey
     ) {
     }
 
-    public record SearchTableRequest(String title, List<SearchMatch> matches, int contextLines) {
+    public record SearchTableRequest(
+            String title,
+            List<SearchMatch> matches,
+            int contextLines,
+            String sessionKey
+    ) {
     }
 
     private final class ResultTreeRenderer extends DefaultTreeCellRenderer {
@@ -1043,19 +1123,6 @@ public final class SearchSidebar extends JPanel {
             Dimension size = new Dimension(max, label.getPreferredSize().height);
             label.setPreferredSize(size);
             label.setMinimumSize(size);
-        }
-    }
-
-    private static void equalizeButtonWidth(JButton... buttons) {
-        int maxWidth = 0;
-        for (JButton button : buttons) {
-            maxWidth = Math.max(maxWidth, button.getPreferredSize().width);
-        }
-        for (JButton button : buttons) {
-            Dimension size = button.getPreferredSize();
-            Dimension equal = new Dimension(maxWidth, size.height);
-            button.setPreferredSize(equal);
-            button.setMinimumSize(equal);
         }
     }
 

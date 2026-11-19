@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.function.BooleanSupplier;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -85,6 +86,28 @@ public final class SearchService {
             return List.of();
         }
 
+        return findInWorkspace(
+                root, query, matchCase, wholeWord, regex,
+                includeFiles, includeDirs, excludeFiles, excludeDirs, () -> false);
+    }
+
+    public static List<SearchMatch> findInWorkspace(
+            Path root,
+            String query,
+            boolean matchCase,
+            boolean wholeWord,
+            boolean regex,
+            String includeFiles,
+            String includeDirs,
+            String excludeFiles,
+            String excludeDirs,
+            BooleanSupplier cancelled
+    ) throws IOException {
+        if (root == null || !Files.isDirectory(root) || query == null || query.isEmpty()) {
+            return List.of();
+        }
+        BooleanSupplier stop = cancelled == null ? () -> false : cancelled;
+
         Pattern pattern = compile(query, matchCase, wholeWord, regex);
         FilePathFilter pathFilter = FilePathFilter.parse(includeFiles, includeDirs, excludeFiles, excludeDirs);
         Path absoluteRoot = root.toAbsolutePath().normalize();
@@ -93,6 +116,9 @@ public final class SearchService {
         Files.walkFileTree(absoluteRoot, new SimpleFileVisitor<>() {
             @Override
             public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+                if (stop.getAsBoolean()) {
+                    return FileVisitResult.TERMINATE;
+                }
                 if (!dir.equals(absoluteRoot) && SKIP_DIRS.contains(dir.getFileName().toString())) {
                     return FileVisitResult.SKIP_SUBTREE;
                 }
@@ -104,6 +130,9 @@ public final class SearchService {
 
             @Override
             public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                if (stop.getAsBoolean()) {
+                    return FileVisitResult.TERMINATE;
+                }
                 if (attrs.size() > 2_000_000) {
                     return FileVisitResult.CONTINUE;
                 }
@@ -117,12 +146,18 @@ public final class SearchService {
                 return FileVisitResult.CONTINUE;
             }
         });
+        if (stop.getAsBoolean()) {
+            return List.of();
+        }
 
         ConcurrentLinkedQueue<SearchMatch> queue = new ConcurrentLinkedQueue<>();
         files.parallelStream().forEach(file -> {
+            if (stop.getAsBoolean()) {
+                return;
+            }
             try {
                 String content = readText(file);
-                if (content == null) {
+                if (content == null || stop.getAsBoolean()) {
                     return;
                 }
                 List<SearchMatch> found = findInText(
@@ -134,6 +169,9 @@ public final class SearchService {
                 // binary / unreadable
             }
         });
+        if (stop.getAsBoolean()) {
+            return List.of();
+        }
 
         return sorted(queue);
     }
