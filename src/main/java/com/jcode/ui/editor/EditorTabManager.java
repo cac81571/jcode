@@ -21,7 +21,6 @@ import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
-import java.awt.Font;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.event.MouseAdapter;
@@ -39,8 +38,6 @@ public final class EditorTabManager {
 
     private final JTabbedPane tabs = new JTabbedPane();
     private final Map<Path, CodeEditorPane> openEditors = new HashMap<>();
-    /** Explorer single-click reuses this tab. Double-click and other opens pin it. */
-    private CodeEditorPane preview;
     private DiffViewerPanel diffViewer;
     private SearchResultsTablePanel searchTable;
     private Consumer<CodeEditorPane> onActiveChanged = e -> {
@@ -71,34 +68,15 @@ public final class EditorTabManager {
         };
     }
 
-    public CodeEditorPane open(Path file) throws IOException {
-        CodeEditorPane editor = openNew(file, -1);
-        pin(editor);
-        return editor;
+    public CodeEditorPane findOpen(Path file) {
+        if (file == null) {
+            return null;
+        }
+        return openEditors.get(file.toAbsolutePath().normalize());
     }
 
-    /**
-     * Explorer single-click: reuse one tab. An already open file is selected as-is.
-     * Returns null when replacing a dirty preview was cancelled.
-     */
-    public CodeEditorPane openInPreview(Path file) throws IOException {
-        Path key = file.toAbsolutePath().normalize();
-        CodeEditorPane existing = openEditors.get(key);
-        if (existing != null) {
-            tabs.setSelectedComponent(existing.getComponent());
-            return existing;
-        }
-        int insertAt = -1;
-        if (preview != null) {
-            insertAt = tabs.indexOfComponent(preview.getComponent());
-            if (insertAt >= 0 && !closeEditor(preview)) {
-                return null;
-            }
-        }
-        CodeEditorPane editor = openNew(key, insertAt);
-        preview = editor;
-        refreshTabTitle(editor);
-        return editor;
+    public CodeEditorPane open(Path file) throws IOException {
+        return openNew(file, -1);
     }
 
     private CodeEditorPane openNew(Path file, int index) throws IOException {
@@ -125,13 +103,6 @@ public final class EditorTabManager {
         tabs.setTabComponentAt(at, createTabHeader(title, () -> closeEditor(editor)));
         tabs.setSelectedComponent(editor.getComponent());
         return editor;
-    }
-
-    private void pin(CodeEditorPane editor) {
-        if (editor != null && preview == editor) {
-            preview = null;
-            refreshTabTitle(editor);
-        }
     }
 
     /**
@@ -444,9 +415,6 @@ public final class EditorTabManager {
         }
         tabs.remove(editor.getComponent());
         openEditors.remove(editor.getFile());
-        if (editor == preview) {
-            preview = null;
-        }
         return true;
     }
 
@@ -516,8 +484,6 @@ public final class EditorTabManager {
         Component header = tabs.getTabComponentAt(index);
         if (header instanceof TabHeader tabHeader) {
             tabHeader.setTitle(title);
-            CodeEditorPane editor = findByComponent(tabs.getComponentAt(index));
-            tabHeader.setPreview(editor != null && editor == preview);
         } else if (header == null) {
             Component content = tabs.getComponentAt(index);
             Runnable closer;
@@ -566,14 +532,6 @@ public final class EditorTabManager {
 
         void setTitle(String title) {
             titleLabel.setText(title);
-        }
-
-        void setPreview(boolean preview) {
-            Font base = titleLabel.getFont();
-            if (base != null) {
-                titleLabel.setFont(base.deriveFont(preview ? Font.ITALIC : Font.PLAIN));
-            }
-            titleLabel.setToolTipText(preview ? "シングルクリックで置き換わります" : null);
         }
     }
 

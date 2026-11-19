@@ -4,6 +4,7 @@ import com.jcode.service.ExternalOpener;
 import com.jcode.service.GitService;
 import com.jcode.service.RecentItems;
 import com.jcode.service.SakuraLauncher;
+import com.jcode.service.SearchService;
 import com.jcode.ui.editor.CodeEditorPane;
 import com.jcode.ui.editor.EditorTabManager;
 import com.jcode.ui.editor.JavaOutlinePanel;
@@ -28,6 +29,7 @@ import javax.swing.JRadioButtonMenuItem;
 import javax.swing.JSplitPane;
 import javax.swing.JTabbedPane;
 import javax.swing.KeyStroke;
+import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import javax.swing.WindowConstants;
 import java.awt.BorderLayout;
@@ -54,6 +56,8 @@ public final class MainFrame extends JFrame {
     private final StatusBar statusBar = new StatusBar();
     private final JTabbedPane activityBar = new JTabbedPane(JTabbedPane.TOP);
     private final Timer outlineTimer = new Timer(300, e -> refreshOutline());
+    /** Drops a disk preview that finishes after a newer file was selected. */
+    private int outlineGeneration;
     private JSplitPane editorSplit;
     private JSplitPane sideSplit;
     private boolean fileHistoryVisible;
@@ -331,8 +335,8 @@ public final class MainFrame extends JFrame {
             }
         });
 
-        fileTree.setOnOpenFile(this::openFileInSameTab);
-        fileTree.setOnOpenInNewTab(this::openFile);
+        fileTree.setOnOpenFile(this::openFile);
+        fileTree.setOnPreviewFile(this::previewOutline);
         fileTree.setOnShowFileHistory(this::showFileHistory);
         searchSidebar.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
@@ -444,16 +448,8 @@ public final class MainFrame extends JFrame {
     }
 
     private void openFile(Path path) {
-        openEditor(path, false);
-    }
-
-    private void openFileInSameTab(Path path) {
-        openEditor(path, true);
-    }
-
-    private void openEditor(Path path, boolean sameTab) {
         try {
-            CodeEditorPane opened = sameTab ? editors.openInPreview(path) : editors.open(path);
+            CodeEditorPane opened = editors.open(path);
             if (opened == null) {
                 return;
             }
@@ -590,18 +586,61 @@ public final class MainFrame extends JFrame {
     }
 
     private void refreshOutline() {
+        outlineGeneration++;
         CodeEditorPane editor = editors.getActiveEditor();
         if (editor == null || editor.isVirtual()) {
             javaOutlinePanel.showMessage("ファイルを開いてください");
             return;
         }
-        Path file = editor.getFile();
-        String name = file.getFileName() == null ? "" : file.getFileName().toString();
+        showOutlineFor(editor.getFile(), editor.getText());
+    }
+
+    /** Shows the outline as soon as a file is clicked, before the editor tab opens. */
+    private void previewOutline(Path path) {
+        if (path == null) {
+            return;
+        }
+        String name = path.getFileName() == null ? "" : path.getFileName().toString();
         if (!name.toLowerCase(java.util.Locale.ROOT).endsWith(".java")) {
+            outlineGeneration++;
             javaOutlinePanel.showMessage("Java ファイルではありません");
             return;
         }
-        javaOutlinePanel.showSource(name, editor.getText());
+        CodeEditorPane open = editors.findOpen(path);
+        if (open != null) {
+            outlineGeneration++;
+            showOutlineFor(path, open.getText());
+            return;
+        }
+        final int generation = ++outlineGeneration;
+        new SwingWorker<String, Void>() {
+            @Override
+            protected String doInBackground() {
+                try {
+                    String text = SearchService.readText(path);
+                    return text == null ? "" : text;
+                } catch (IOException ex) {
+                    return "";
+                }
+            }
+
+            @Override
+            protected void done() {
+                if (generation != outlineGeneration) {
+                    return;
+                }
+                try {
+                    showOutlineFor(path, get());
+                } catch (Exception ignored) {
+                    javaOutlinePanel.showMessage("アウトラインを表示できません");
+                }
+            }
+        }.execute();
+    }
+
+    private void showOutlineFor(Path path, String source) {
+        String name = path.getFileName() == null ? "" : path.getFileName().toString();
+        javaOutlinePanel.showSource(name, source == null ? "" : source);
     }
 
     private void openInExternalEditor() {
