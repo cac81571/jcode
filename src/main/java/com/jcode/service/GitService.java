@@ -475,15 +475,27 @@ public final class GitService implements Closeable {
         String normalized = normalize(path);
         String oldText;
         String newText;
+        String head = shortIdOf("HEAD");
+        if (head == null) {
+            head = "";
+        }
+        String oldRev;
         if (staged) {
             oldText = readFromHead(normalized);
             newText = readFromIndex(normalized);
+            oldRev = head;
         } else {
             String indexText = readFromIndex(normalized);
-            oldText = indexText.isEmpty() ? readFromHead(normalized) : indexText;
+            if (indexText.isEmpty()) {
+                oldText = readFromHead(normalized);
+                oldRev = head;
+            } else {
+                oldText = indexText;
+                oldRev = "";
+            }
             newText = readWorkingTree(normalized);
         }
-        return new DiffTexts(normalized, oldText, newText);
+        return new DiffTexts(normalized, oldText, newText, oldRev, "");
     }
 
     /**
@@ -520,7 +532,29 @@ public final class GitService implements Closeable {
         }
         String oldText = readBlob(match.getOldId().toObjectId());
         String newText = readBlob(match.getNewId().toObjectId());
-        return new DiffTexts(normalized, oldText, newText);
+        String newRev = shortIdOf(commitId);
+        return new DiffTexts(
+                normalized,
+                oldText,
+                newText,
+                parentShortId(commitId),
+                newRev == null ? "" : newRev
+        );
+    }
+
+    private String parentShortId(String commitId) throws IOException {
+        ObjectId id = repository.resolve(commitId);
+        if (id == null) {
+            return "";
+        }
+        try (RevWalk walk = new RevWalk(repository)) {
+            RevCommit commit = walk.parseCommit(id);
+            if (commit.getParentCount() == 0) {
+                return "";
+            }
+            String name = commit.getParent(0).getName();
+            return name.substring(0, Math.min(7, name.length()));
+        }
     }
 
     private String cachedDiffCommitId;

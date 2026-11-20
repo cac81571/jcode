@@ -13,7 +13,10 @@ import org.fife.ui.rtextarea.SmartHighlightPainter;
 
 import javax.swing.BorderFactory;
 import javax.swing.ButtonGroup;
+import javax.swing.JButton;
+import javax.swing.JFileChooser;
 import javax.swing.JLabel;
+import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JRadioButton;
 import javax.swing.JSpinner;
@@ -25,6 +28,12 @@ import javax.swing.text.Highlighter;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.FlowLayout;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -43,6 +52,8 @@ public final class DiffViewerPanel extends JPanel {
     private static final char INLINE_CLOSE = '\uE001';
 
     private final JLabel title = new JLabel(" ");
+    private final JButton saveOldBtn = new JButton("変更前を保存");
+    private final JButton saveNewBtn = new JButton("変更後を保存");
     private final JRadioButton sideBySideBtn = new JRadioButton("左右分割", true);
     private final JRadioButton unifiedBtn = new JRadioButton("Unified");
     private final JSpinner contextSpinner = new JSpinner(new SpinnerNumberModel(3, 0, 20, 1));
@@ -75,6 +86,12 @@ public final class DiffViewerPanel extends JPanel {
         group.add(unifiedBtn);
         sideBySideBtn.addActionListener(e -> setMode(Mode.SIDE_BY_SIDE));
         unifiedBtn.addActionListener(e -> setMode(Mode.UNIFIED));
+        saveOldBtn.setToolTipText("変更前の内容をファイルに保存");
+        saveOldBtn.setEnabled(false);
+        saveOldBtn.addActionListener(e -> saveSide(true));
+        saveNewBtn.setToolTipText("変更後の内容をファイルに保存");
+        saveNewBtn.setEnabled(false);
+        saveNewBtn.addActionListener(e -> saveSide(false));
         contextSpinner.setToolTipText("変更箇所の前後に残す行数");
         ((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField().setColumns(2);
         contextSpinner.addChangeListener(e -> {
@@ -86,6 +103,8 @@ public final class DiffViewerPanel extends JPanel {
         JPanel toolbar = new JPanel(new BorderLayout());
         toolbar.add(title, BorderLayout.WEST);
         JPanel modes = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        modes.add(saveOldBtn);
+        modes.add(saveNewBtn);
         modes.add(new JLabel("前後"));
         modes.add(contextSpinner);
         modes.add(new JLabel("行"));
@@ -132,6 +151,8 @@ public final class DiffViewerPanel extends JPanel {
     public void clear() {
         current = null;
         title.setText(" ");
+        saveOldBtn.setEnabled(false);
+        saveNewBtn.setEnabled(false);
         showEmpty();
     }
 
@@ -141,6 +162,8 @@ public final class DiffViewerPanel extends JPanel {
             clear();
             return;
         }
+        saveOldBtn.setEnabled(true);
+        saveNewBtn.setEnabled(true);
         String path = texts.path();
         title.setText(PathEllipsis.middle(path, 64));
         title.setToolTipText(path);
@@ -149,6 +172,78 @@ public final class DiffViewerPanel extends JPanel {
         } else {
             renderUnified(texts);
         }
+    }
+
+    private void saveSide(boolean old) {
+        if (current == null) {
+            return;
+        }
+        String titleText = old ? "変更前を保存" : "変更後を保存";
+        String text = old ? current.oldText() : current.newText();
+        if (text == null) {
+            text = "";
+        }
+        if (text.startsWith("[binary or too large")) {
+            JOptionPane.showMessageDialog(this,
+                    "この内容は表示用の代替テキストです。保存できません。",
+                    titleText, JOptionPane.INFORMATION_MESSAGE);
+            return;
+        }
+        String name = suggestName(current.path(), old ? current.oldRev() : current.newRev(), old);
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(titleText);
+        chooser.setSelectedFile(new java.io.File(name));
+        if (chooser.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path out = chooser.getSelectedFile().toPath();
+        if (Files.exists(out)) {
+            int overwrite = JOptionPane.showConfirmDialog(
+                    this,
+                    out.getFileName() + " を上書きしますか？",
+                    titleText,
+                    JOptionPane.OK_CANCEL_OPTION,
+                    JOptionPane.WARNING_MESSAGE
+            );
+            if (overwrite != JOptionPane.OK_OPTION) {
+                return;
+            }
+        }
+        try {
+            Path parent = out.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
+            }
+            Files.writeString(out, text, StandardCharsets.UTF_8);
+        } catch (IOException ex) {
+            JOptionPane.showMessageDialog(this, ex.getMessage(),
+                    titleText, JOptionPane.ERROR_MESSAGE);
+        }
+    }
+
+    private static String suggestName(String path, String rev, boolean old) {
+        String name = fileName(path);
+        if (name.isEmpty()) {
+            name = old ? "before.txt" : "after.txt";
+        }
+        String date = LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE);
+        String hash = rev == null ? "" : rev.trim();
+        if (hash.length() > 7) {
+            hash = hash.substring(0, 7);
+        }
+        if (hash.isEmpty()) {
+            return date + "-" + name;
+        }
+        return date + "-" + hash + "-" + name;
+    }
+
+    private static String fileName(String path) {
+        if (path == null || path.isBlank()) {
+            return "";
+        }
+        String normalized = path.replace('\\', '/');
+        int slash = normalized.lastIndexOf('/');
+        return slash < 0 ? normalized : normalized.substring(slash + 1);
     }
 
     private void setMode(Mode next) {
