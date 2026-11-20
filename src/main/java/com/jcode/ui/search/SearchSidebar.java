@@ -11,6 +11,7 @@ import com.jcode.ui.ClipboardPaths;
 import com.jcode.ui.PathEllipsis;
 import com.jcode.ui.ThemeManager;
 
+import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
@@ -18,6 +19,7 @@ import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.KeyStroke;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -41,6 +43,7 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.event.ActionEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
@@ -179,8 +182,16 @@ public final class SearchSidebar extends JPanel {
         searchOnEnter(excludeDirField);
         searchOnEnter(((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField());
         cancelBtn.setVisible(false);
-        cancelBtn.setToolTipText("検索を中止");
+        cancelBtn.setToolTipText("検索を中止 (Esc)");
         cancelBtn.addActionListener(e -> cancelSearch());
+        getInputMap(WHEN_ANCESTOR_OF_FOCUSED_COMPONENT)
+                .put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancelSearch");
+        getActionMap().put("cancelSearch", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                cancelSearch();
+            }
+        });
 
         replaceAllBtn.setEnabled(false);
         replaceAllBtn.setToolTipText("検索結果のファイルすべてで置換（要確認）");
@@ -456,6 +467,18 @@ public final class SearchSidebar extends JPanel {
     /** Enter in the search form runs the search. Combo popups still use Enter to pick a history item. */
     private void searchOnEnter(Component component) {
         component.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() != KeyEvent.VK_ESCAPE || e.getModifiersEx() != 0 || !searching) {
+                    return;
+                }
+                if (component.getParent() instanceof JComboBox<?> combo && combo.isPopupVisible()) {
+                    return;
+                }
+                e.consume();
+                cancelSearch();
+            }
+
             @Override
             public void keyReleased(KeyEvent e) {
                 if (e.getKeyCode() != KeyEvent.VK_ENTER || e.getModifiersEx() != 0) {

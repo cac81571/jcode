@@ -11,7 +11,10 @@ import org.fife.ui.rtextarea.RTextScrollPane;
 import org.fife.ui.rtextarea.SmartHighlightPainter;
 
 import javax.swing.JComponent;
+import javax.swing.text.AbstractDocument;
+import javax.swing.text.AttributeSet;
 import javax.swing.text.BadLocationException;
+import javax.swing.text.DocumentFilter;
 import javax.swing.text.Highlighter;
 import java.awt.Color;
 import java.io.IOException;
@@ -34,6 +37,8 @@ public final class CodeEditorPane {
     private final RTextScrollPane scrollPane;
     private boolean dirty;
     private String lastSavedText;
+    /** Line ending to write back. The document itself always uses {@code \n}. */
+    private String lineEnding = "\n";
     private final List<Object> matchHighlights = new ArrayList<>();
     private final List<Object> lineHighlights = new ArrayList<>();
     private Object jumpHighlight;
@@ -63,10 +68,12 @@ public final class CodeEditorPane {
         // Virtual docs stay editable so results can be selected / copied freely
         textArea.setEditable(true);
         applyEditorTheme();
+        installNewlineFilter();
+        this.lineEnding = detectLineEnding(content);
 
         textArea.setText(content);
         textArea.setCaretPosition(0);
-        this.lastSavedText = content;
+        this.lastSavedText = textArea.getText();
         this.dirty = false;
 
         if (!virtual) {
@@ -129,11 +136,12 @@ public final class CodeEditorPane {
             return;
         }
         String content = Files.exists(file) ? readFileText(file) : "";
+        lineEnding = detectLineEnding(content);
         int caret = textArea.getCaretPosition();
         clearCustomHighlights();
         textArea.setText(content);
-        textArea.setCaretPosition(Math.min(caret, content.length()));
-        lastSavedText = content;
+        textArea.setCaretPosition(Math.min(caret, textArea.getDocument().getLength()));
+        lastSavedText = textArea.getText();
         dirty = false;
     }
 
@@ -265,8 +273,9 @@ public final class CodeEditorPane {
             return;
         }
         Files.createDirectories(file.getParent());
-        Files.writeString(file, textArea.getText(), StandardCharsets.UTF_8);
-        lastSavedText = textArea.getText();
+        String editorText = textArea.getText();
+        Files.writeString(file, toFileText(editorText), StandardCharsets.UTF_8);
+        lastSavedText = editorText;
         dirty = false;
     }
 
@@ -345,6 +354,71 @@ public final class CodeEditorPane {
         textArea.setFadeCurrentLineHighlight(false);
         textArea.setBackground(dark ? new Color(30, 30, 30) : Color.WHITE);
         textArea.setCurrentLineHighlightColor(dark ? new Color(32, 104, 136) : RowSelection.BACKGROUND);
+    }
+
+    /** Swing only breaks lines on LF. A leftover CR is invisible here and becomes an extra line in Sakura. */
+    private void installNewlineFilter() {
+        if (textArea.getDocument() instanceof AbstractDocument document) {
+            document.setDocumentFilter(new DocumentFilter() {
+                @Override
+                public void insertString(FilterBypass fb, int offset, String string, AttributeSet attr)
+                        throws BadLocationException {
+                    super.insertString(fb, offset, normalizeNewlines(string), attr);
+                }
+
+                @Override
+                public void replace(FilterBypass fb, int offset, int length, String text, AttributeSet attrs)
+                        throws BadLocationException {
+                    super.replace(fb, offset, length, normalizeNewlines(text), attrs);
+                }
+            });
+        }
+    }
+
+    private static String detectLineEnding(String text) {
+        int crlf = 0;
+        int lf = 0;
+        int cr = 0;
+        if (text != null) {
+            for (int i = 0; i < text.length(); i++) {
+                char c = text.charAt(i);
+                if (c == '\r') {
+                    if (i + 1 < text.length() && text.charAt(i + 1) == '\n') {
+                        crlf++;
+                        i++;
+                    } else {
+                        cr++;
+                    }
+                } else if (c == '\n') {
+                    lf++;
+                }
+            }
+        }
+        if (crlf >= lf && crlf >= cr && crlf > 0) {
+            return "\r\n";
+        }
+        if (cr > lf && cr > 0) {
+            return "\r";
+        }
+        if (lf > 0) {
+            return "\n";
+        }
+        return System.lineSeparator();
+    }
+
+    private static String normalizeNewlines(String text) {
+        if (text == null || text.indexOf('\r') < 0) {
+            return text;
+        }
+        return text.replace("\r\n", "\n").replace('\r', '\n');
+    }
+
+    private String toFileText(String editorText) {
+        String normalized = normalizeNewlines(editorText);
+        if (normalized == null || "\n".equals(lineEnding)) {
+            return normalized == null ? "" : normalized;
+        }
+        return normalized.replace("\n", lineEnding);
     }
 
     private static String readFileText(Path file) throws IOException {
