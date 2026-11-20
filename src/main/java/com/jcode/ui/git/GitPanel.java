@@ -28,6 +28,7 @@ import javax.swing.filechooser.FileNameExtensionFilter;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.FlowLayout;
+import java.awt.Rectangle;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
 import java.nio.file.Files;
@@ -121,17 +122,8 @@ public final class GitPanel extends JPanel {
             onRepositoryReset.run();
         });
 
-        stagedList.addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                // Diff shows the lead (last clicked) item when multi-selecting
-                showDiff(stagedList.getSelectedValue(), true);
-            }
-        });
-        changesList.addListSelectionListener(e -> {
-            if (!e.getValueIsAdjusting()) {
-                showDiff(changesList.getSelectedValue(), false);
-            }
-        });
+        installDiffOnClick(stagedList, true);
+        installDiffOnClick(changesList, false);
         installOpenOnDoubleClick(stagedList);
         installOpenOnDoubleClick(changesList);
 
@@ -570,8 +562,56 @@ public final class GitPanel extends JPanel {
         }
     }
 
+    /**
+     * Selection changes show the diff. A click on the already selected row does not
+     * fire a selection event, so that click shows the diff as well.
+     * Both paths can run for one click; the later request wins.
+     */
+    private void installDiffOnClick(JList<GitChange> list, boolean staged) {
+        int[] request = { 0 };
+        list.addListSelectionListener(e -> {
+            if (!e.getValueIsAdjusting()) {
+                scheduleDiff(request, leadChange(list), staged);
+            }
+        });
+        list.addMouseListener(new MouseAdapter() {
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (!SwingUtilities.isLeftMouseButton(e) || e.getClickCount() != 1) {
+                    return;
+                }
+                int index = list.locationToIndex(e.getPoint());
+                if (index < 0) {
+                    return;
+                }
+                Rectangle cell = list.getCellBounds(index, index);
+                if (cell == null || !cell.contains(e.getPoint())) {
+                    return;
+                }
+                scheduleDiff(request, list.getModel().getElementAt(index), staged);
+            }
+        });
+    }
+
+    private void scheduleDiff(int[] request, GitChange change, boolean staged) {
+        int mine = ++request[0];
+        SwingUtilities.invokeLater(() -> {
+            if (mine == request[0]) {
+                showDiff(change, staged);
+            }
+        });
+    }
+
+    private static GitChange leadChange(JList<GitChange> list) {
+        int lead = list.getLeadSelectionIndex();
+        if (lead >= 0 && lead < list.getModel().getSize()) {
+            return list.getModel().getElementAt(lead);
+        }
+        return list.getSelectedValue();
+    }
+
     private void installOpenOnDoubleClick(JList<GitChange> list) {
-        list.setToolTipText("ダブルクリックでファイルを開く");
+        list.setToolTipText("クリックで差分を表示、ダブルクリックでファイルを開く");
         list.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
