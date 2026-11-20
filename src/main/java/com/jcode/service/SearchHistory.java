@@ -16,7 +16,9 @@ public final class SearchHistory {
         INCLUDE_FILE("search.include.file"),
         INCLUDE_DIR("search.include.dir"),
         EXCLUDE_FILE("search.exclude.file"),
-        EXCLUDE_DIR("search.exclude.dir");
+        EXCLUDE_DIR("search.exclude.dir"),
+        QUICK_OPEN_FOLDER("quickopen.folder"),
+        QUICK_OPEN_EXTENSION("quickopen.extension");
 
         private final String key;
 
@@ -27,6 +29,7 @@ public final class SearchHistory {
 
     private static final int MAX = 20;
     private static final String SEP = "\u001e";
+    private static final String UNSET = "\u0000";
     private static final Preferences PREFS = Preferences.userNodeForPackage(SearchHistory.class);
 
     private SearchHistory() {
@@ -66,10 +69,38 @@ public final class SearchHistory {
         return List.copyOf(load(kind));
     }
 
+    /** Remembers {@code value} as the value to restore next time, including blank. */
+    public static void rememberLast(Kind kind, String value) {
+        if (kind == null) {
+            return;
+        }
+        String trimmed = value == null ? "" : value.trim();
+        PREFS.put(lastKey(kind), trimmed);
+        remember(kind, trimmed);
+    }
+
+    /** Last restored value. Falls back to the newest history entry when none was stored yet. */
+    public static String last(Kind kind) {
+        if (kind == null) {
+            return "";
+        }
+        String stored = PREFS.get(lastKey(kind), UNSET);
+        if (!UNSET.equals(stored)) {
+            return stored;
+        }
+        List<String> items = load(kind);
+        return items.isEmpty() ? "" : items.get(0);
+    }
+
     public static void clear(Kind kind) {
         if (kind != null) {
             PREFS.remove(kind.key);
+            PREFS.remove(lastKey(kind));
         }
+    }
+
+    private static String lastKey(Kind kind) {
+        return kind.key + ".last";
     }
 
     private static List<String> load(Kind kind) {

@@ -141,7 +141,12 @@ public final class EditorTabManager {
             String title,
             java.util.List<SearchMatch> matches,
             java.nio.file.Path workspaceRoot,
-            int contextLines
+            int contextLines,
+            String query,
+            boolean matchCase,
+            boolean wholeWord,
+            boolean regex,
+            SearchResultsTablePanel.RowOpener onOpenRow
     ) {
         String id = key == null || key.isBlank() ? "search" : key;
         SearchResultsTablePanel panel = searchTables.get(id);
@@ -155,6 +160,8 @@ public final class EditorTabManager {
         } else {
             updateTabHeaderTitle(tabs.indexOfComponent(panel), title);
         }
+        panel.setOnOpenRow(onOpenRow);
+        panel.setSearchContext(query, matchCase, wholeWord, regex);
         panel.setMatches(matches, workspaceRoot, contextLines);
         tabs.setSelectedComponent(panel);
     }

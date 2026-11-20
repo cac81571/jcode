@@ -17,6 +17,7 @@ import javax.swing.JTable;
 import javax.swing.KeyStroke;
 import javax.swing.ListSelectionModel;
 import javax.swing.SwingConstants;
+import javax.swing.SwingUtilities;
 import javax.swing.table.AbstractTableModel;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableColumnModel;
@@ -49,9 +50,21 @@ public final class SearchResultsTablePanel extends JPanel {
     private static final Color TABLE_BACKGROUND = Color.WHITE;
     private static final Color TABLE_FOREGROUND = new Color(30, 30, 30);
 
+    /** Opens the file for a double-clicked row. */
+    @FunctionalInterface
+    public interface RowOpener {
+        void open(TableRow row, String query, boolean matchCase, boolean wholeWord, boolean regex);
+    }
+
     private final ResultsModel model = new ResultsModel();
     private final JTable table = new JTable(model);
     private final JScrollPane scroll = new JScrollPane(table);
+    private RowOpener onOpenRow = (row, query, matchCase, wholeWord, regex) -> {
+    };
+    private String query = "";
+    private boolean matchCase;
+    private boolean wholeWord;
+    private boolean regex;
 
     public SearchResultsTablePanel() {
         super(new BorderLayout());
@@ -102,11 +115,18 @@ public final class SearchResultsTablePanel extends JPanel {
             public void mouseReleased(MouseEvent e) {
                 showCopyMenu(e);
             }
+
+            @Override
+            public void mouseClicked(MouseEvent e) {
+                if (e.getClickCount() == 2 && SwingUtilities.isLeftMouseButton(e)) {
+                    openRowAt(e);
+                }
+            }
         });
 
         JButton copy = new JButton("TSV形式でコピー");
         copy.setToolTipText("表全体をタブ区切りでコピーします");
-        table.setToolTipText("Ctrl+A で全選択、Ctrl+C で選択行を TSV コピー");
+        table.setToolTipText("ダブルクリックでファイルを開く。Ctrl+A で全選択、Ctrl+C で選択行を TSV コピー");
         copy.setFocusable(false);
         copy.addActionListener(e -> copyForExcel());
         JPanel bar = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
@@ -203,9 +223,33 @@ public final class SearchResultsTablePanel extends JPanel {
         return text;
     }
 
+    public void setOnOpenRow(RowOpener onOpenRow) {
+        this.onOpenRow = onOpenRow != null ? onOpenRow : (row, query, matchCase, wholeWord, regex) -> {
+        };
+    }
+
+    public void setSearchContext(String query, boolean matchCase, boolean wholeWord, boolean regex) {
+        this.query = query == null ? "" : query;
+        this.matchCase = matchCase;
+        this.wholeWord = wholeWord;
+        this.regex = regex;
+    }
+
     public void setMatches(List<SearchMatch> matches, Path workspaceRoot, int contextLines) {
         model.setRows(SearchReportBuilder.tableRows(matches, contextLines), workspaceRoot);
         table.clearSelection();
+    }
+
+    private void openRowAt(MouseEvent e) {
+        int row = table.rowAtPoint(e.getPoint());
+        if (row < 0) {
+            return;
+        }
+        TableRow line = model.rowAt(table.convertRowIndexToModel(row));
+        if (line == null || line.file() == null) {
+            return;
+        }
+        onOpenRow.open(line, query, matchCase, wholeWord, regex);
     }
 
     private static String compact(String line) {

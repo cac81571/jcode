@@ -5,6 +5,7 @@ import com.jcode.service.GitService;
 import com.jcode.service.RecentItems;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.service.SearchService;
+import com.jcode.service.WorkspaceFiles;
 import com.jcode.ui.editor.CodeEditorPane;
 import com.jcode.ui.editor.EditorTabManager;
 import com.jcode.ui.editor.JavaOutlinePanel;
@@ -13,6 +14,7 @@ import com.jcode.ui.explorer.FileTreePanel;
 import com.jcode.ui.explorer.QuickOpenDialog;
 import com.jcode.ui.git.GitPanel;
 import com.jcode.ui.search.FindReplaceBar;
+import com.jcode.service.SearchReportBuilder.TableRow;
 import com.jcode.ui.search.SearchSidebar;
 import com.jcode.ui.search.SearchTabs;
 
@@ -369,6 +371,7 @@ public final class MainFrame extends JFrame {
         fileTree.setOnOpenFile(this::openFile);
         fileTree.setOnPreviewFile(this::previewOutline);
         fileTree.setOnShowFileHistory(this::showFileHistory);
+        fileTree.setOnSearchDirectory(this::searchInDirectory);
         searchTabs.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor == null || editor.isVirtual()) {
@@ -409,7 +412,15 @@ public final class MainFrame extends JFrame {
         searchTabs.setOnOpenTable(request -> {
             editors.showSearchResultsTable(
                     "search-" + request.sessionKey(),
-                    request.title(), request.matches(), workspaceRoot, request.contextLines());
+                    request.title(),
+                    request.matches(),
+                    workspaceRoot,
+                    request.contextLines(),
+                    request.query(),
+                    request.matchCase(),
+                    request.wholeWord(),
+                    request.regex(),
+                    this::openSearchTableRow);
             statusBar.setLeft("検索結果をテーブルで表示");
         });
         searchTabs.setOnReplaced(result -> {
@@ -480,6 +491,28 @@ public final class MainFrame extends JFrame {
         dialog.setVisible(true);
     }
 
+    private void openSearchTableRow(
+            TableRow row, String query, boolean matchCase, boolean wholeWord, boolean regex
+    ) {
+        if (row == null || row.file() == null) {
+            return;
+        }
+        openFile(row.file());
+        CodeEditorPane editor = editors.getActiveEditor();
+        if (editor == null || editor.isVirtual() || editor.getFile() == null
+                || !editor.getFile().toAbsolutePath().normalize().equals(row.file().toAbsolutePath().normalize())) {
+            return;
+        }
+        if (query != null && !query.isEmpty()) {
+            editor.highlightAllMatches(query, matchCase, wholeWord, regex);
+        }
+        if (row.match() != null) {
+            editor.highlightRange(row.match().lineNumber(), row.match().startColumn(), row.match().endColumn());
+        } else {
+            editor.goTo(row.lineNumber(), 1);
+        }
+    }
+
     private void openFile(Path path) {
         try {
             CodeEditorPane opened = editors.open(path);
@@ -493,6 +526,18 @@ public final class MainFrame extends JFrame {
             JOptionPane.showMessageDialog(this, "Cannot open file:\n" + ex.getMessage(),
                     "Open", JOptionPane.ERROR_MESSAGE);
         }
+    }
+
+    private void searchInDirectory(Path dir) {
+        if (dir == null || workspaceRoot == null || !Files.isDirectory(dir)) {
+            return;
+        }
+        String relative = WorkspaceFiles.relativize(workspaceRoot, dir);
+        if (".".equals(relative)) {
+            relative = "";
+        }
+        activityBar.setSelectedComponent(searchTabs);
+        searchTabs.searchInDirectory(relative);
     }
 
     private void showFileHistory(Path path) {

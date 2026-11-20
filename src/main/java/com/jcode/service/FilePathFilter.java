@@ -157,6 +157,9 @@ public final class FilePathFilter {
     }
 
     private static void addGlob(List<PathMatcher> matchers, String glob) {
+        if (glob == null || glob.isEmpty()) {
+            return;
+        }
         try {
             matchers.add(FileSystems.getDefault().getPathMatcher("glob:" + glob));
         } catch (IllegalArgumentException ignored) {
@@ -195,6 +198,12 @@ public final class FilePathFilter {
         String g = raw.replace('\\', '/');
         if (g.startsWith("./")) {
             g = g.substring(2);
+        }
+        while (g.endsWith("/")) {
+            g = g.substring(0, g.length() - 1);
+        }
+        if (g.isEmpty()) {
+            return "";
         }
         if (!g.contains("/")) {
             return "**/" + g;

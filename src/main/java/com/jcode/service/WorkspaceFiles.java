@@ -55,10 +55,31 @@ public final class WorkspaceFiles {
      * (case-insensitive). Results are scored so filename hits rank higher.
      */
     public static List<Hit> filter(Path root, List<Path> files, String query, int limit) {
+        return filter(root, files, query, "", "", limit);
+    }
+
+    /**
+     * {@code folders} and {@code extensions} are comma-, semicolon-, or whitespace-separated.
+     * A file matches when its directory contains any folder token and its extension is any of the
+     * given extensions. Empty fields do not narrow the list.
+     */
+    public static List<Hit> filter(
+            Path root,
+            List<Path> files,
+            String query,
+            String folders,
+            String extensions,
+            int limit
+    ) {
         String q = query == null ? "" : query.trim();
+        List<String> folderTokens = folderTokens(folders);
+        List<String> extensionTokens = extensionTokens(extensions);
         List<Hit> hits = new ArrayList<>();
         for (Path file : files) {
             String relative = relativize(root, file);
+            if (!matchesFolder(relative, folderTokens) || !matchesExtension(relative, extensionTokens)) {
+                continue;
+            }
             int score = score(relative, q);
             if (score >= 0) {
                 hits.add(new Hit(file, relative, score));
@@ -99,6 +120,77 @@ public final class WorkspaceFiles {
         }
         score += Math.min(path.length(), 99);
         return score;
+    }
+
+    private static List<String> folderTokens(String raw) {
+        List<String> tokens = new ArrayList<>();
+        for (String part : splitTokens(raw)) {
+            String token = part.replace('\\', '/').toLowerCase(Locale.ROOT);
+            while (token.startsWith("/")) {
+                token = token.substring(1);
+            }
+            while (token.endsWith("/")) {
+                token = token.substring(0, token.length() - 1);
+            }
+            if (!token.isEmpty()) {
+                tokens.add(token);
+            }
+        }
+        return tokens;
+    }
+
+    private static List<String> extensionTokens(String raw) {
+        List<String> tokens = new ArrayList<>();
+        for (String part : splitTokens(raw)) {
+            String ext = part.startsWith(".") ? part.substring(1) : part;
+            if (!ext.isEmpty()) {
+                tokens.add(ext.toLowerCase(Locale.ROOT));
+            }
+        }
+        return tokens;
+    }
+
+    private static List<String> splitTokens(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        List<String> tokens = new ArrayList<>();
+        for (String part : raw.split("[,;\\s]+")) {
+            if (!part.isBlank()) {
+                tokens.add(part.trim());
+            }
+        }
+        return tokens;
+    }
+
+    /** Any folder token may match. The token must sit on directory boundaries, not in the file name. */
+    private static boolean matchesFolder(String relative, List<String> folders) {
+        if (folders.isEmpty()) {
+            return true;
+        }
+        String path = relative.toLowerCase(Locale.ROOT).replace('\\', '/');
+        int slash = path.lastIndexOf('/');
+        String dir = slash < 0 ? "" : path.substring(0, slash);
+        String padded = "/" + dir + "/";
+        for (String folder : folders) {
+            if (padded.contains("/" + folder + "/")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Any extension may match. {@code java} and {@code .java} are the same. */
+    private static boolean matchesExtension(String relative, List<String> extensions) {
+        if (extensions.isEmpty()) {
+            return true;
+        }
+        String name = fileName(relative).toLowerCase(Locale.ROOT);
+        int dot = name.lastIndexOf('.');
+        if (dot < 0 || dot == name.length() - 1) {
+            return false;
+        }
+        return extensions.contains(name.substring(dot + 1));
     }
 
     private static String fileName(String path) {

@@ -41,6 +41,8 @@ import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.event.KeyAdapter;
+import java.awt.event.KeyEvent;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -113,8 +115,6 @@ public final class SearchSidebar extends JPanel {
     private int searchGeneration;
     private boolean searching;
     private AtomicBoolean searchCancelled;
-    /** Skip Include/Exclude auto-search while history models are updated. */
-    private boolean suppressFilterAutoSearch;
 
     public SearchSidebar(Supplier<Path> workspaceRoot) {
         super(new BorderLayout(0, 8));
@@ -169,7 +169,15 @@ public final class SearchSidebar extends JPanel {
         replaceField.putClientProperty("JTextField.placeholderText", "置換文字列");
         replaceField.setToolTipText("置換後の文字列");
 
+        searchBtn.setToolTipText("検索 (Enter)");
         searchBtn.addActionListener(e -> runSearch());
+        searchOnEnter(queryField);
+        searchOnEnter(replaceField);
+        searchOnEnter(includeFileField);
+        searchOnEnter(includeDirField);
+        searchOnEnter(excludeFileField);
+        searchOnEnter(excludeDirField);
+        searchOnEnter(((JSpinner.DefaultEditor) contextSpinner.getEditor()).getTextField());
         cancelBtn.setVisible(false);
         cancelBtn.setToolTipText("検索を中止");
         cancelBtn.addActionListener(e -> cancelSearch());
@@ -260,9 +268,6 @@ public final class SearchSidebar extends JPanel {
         north.add(fields, BorderLayout.CENTER);
 
         setupResultsTree();
-
-        // Enter in the editor, or choosing a history item
-        queryField.addActionListener(e -> runSearch());
 
         JPanel summaryStatus = new JPanel(new BorderLayout(8, 0));
         summaryStatus.add(summary, BorderLayout.CENTER);
@@ -360,6 +365,13 @@ public final class SearchSidebar extends JPanel {
         };
     }
 
+    /** Sets Include(dir) without starting a search. */
+    public void searchInDirectory(String relativeDir) {
+        String value = relativeDir == null ? "" : relativeDir.replace('\\', '/');
+        includeDirField.getEditor().setItem(value);
+        focusSearch();
+    }
+
     public void focusSearch() {
         queryField.requestFocusInWindow();
         Component editor = queryField.getEditor().getEditorComponent();
@@ -395,7 +407,6 @@ public final class SearchSidebar extends JPanel {
         field.setToolTipText(tip);
         setComboPlaceholder(field, placeholder);
         installHistoryPopup(field, kind, clearLabel);
-        installFilterAutoSearch(field);
     }
 
     private void reloadFilterHistoryModels() {
@@ -438,6 +449,26 @@ public final class SearchSidebar extends JPanel {
         }
     }
 
+    private void searchOnEnter(JComboBox<String> combo) {
+        searchOnEnter(combo.getEditor().getEditorComponent());
+    }
+
+    /** Enter in the search form runs the search. Combo popups still use Enter to pick a history item. */
+    private void searchOnEnter(Component component) {
+        component.addKeyListener(new KeyAdapter() {
+            @Override
+            public void keyReleased(KeyEvent e) {
+                if (e.getKeyCode() != KeyEvent.VK_ENTER || e.getModifiersEx() != 0) {
+                    return;
+                }
+                if (component.getParent() instanceof JComboBox<?> combo && combo.isPopupVisible()) {
+                    return;
+                }
+                runSearch();
+            }
+        });
+    }
+
     private void runSearch() {
         String query = currentQuery().trim();
         if (query.isEmpty()) {
@@ -468,23 +499,18 @@ public final class SearchSidebar extends JPanel {
         String excludeFiles = comboText(excludeFileField).trim();
         String excludeDirs = comboText(excludeDirField).trim();
 
-        suppressFilterAutoSearch = true;
-        try {
-            SearchHistory.remember(query);
-            SearchHistory.remember(SearchHistory.Kind.INCLUDE_FILE, includeFiles);
-            SearchHistory.remember(SearchHistory.Kind.INCLUDE_DIR, includeDirs);
-            SearchHistory.remember(SearchHistory.Kind.EXCLUDE_FILE, excludeFiles);
-            SearchHistory.remember(SearchHistory.Kind.EXCLUDE_DIR, excludeDirs);
-            reloadHistoryModel();
-            reloadFilterHistoryModels();
-            queryField.getEditor().setItem(query);
-            includeFileField.getEditor().setItem(includeFiles);
-            includeDirField.getEditor().setItem(includeDirs);
-            excludeFileField.getEditor().setItem(excludeFiles);
-            excludeDirField.getEditor().setItem(excludeDirs);
-        } finally {
-            suppressFilterAutoSearch = false;
-        }
+        SearchHistory.remember(query);
+        SearchHistory.remember(SearchHistory.Kind.INCLUDE_FILE, includeFiles);
+        SearchHistory.remember(SearchHistory.Kind.INCLUDE_DIR, includeDirs);
+        SearchHistory.remember(SearchHistory.Kind.EXCLUDE_FILE, excludeFiles);
+        SearchHistory.remember(SearchHistory.Kind.EXCLUDE_DIR, excludeDirs);
+        reloadHistoryModel();
+        reloadFilterHistoryModels();
+        queryField.getEditor().setItem(query);
+        includeFileField.getEditor().setItem(includeFiles);
+        includeDirField.getEditor().setItem(includeDirs);
+        excludeFileField.getEditor().setItem(excludeFiles);
+        excludeDirField.getEditor().setItem(excludeDirs);
 
         if (searchCancelled != null) {
             searchCancelled.set(true);
@@ -703,7 +729,16 @@ public final class SearchSidebar extends JPanel {
         String title = "Search: " + (lastQuery.isBlank() ? "(empty)" : truncateLine(lastQuery, 40));
         int context = (Integer) contextSpinner.getValue();
         if (table) {
-            onOpenTable.accept(new SearchTableRequest(title, flatMatches, context, sessionKey));
+            onOpenTable.accept(new SearchTableRequest(
+                    title,
+                    flatMatches,
+                    context,
+                    sessionKey,
+                    lastQuery,
+                    matchCase.isSelected(),
+                    wholeWord.isSelected(),
+                    regex.isSelected()
+            ));
             return;
         }
         String report = SearchReportBuilder.build(lastQuery, workspaceRoot.get(), lastGroups, context);
@@ -796,7 +831,11 @@ public final class SearchSidebar extends JPanel {
             String title,
             List<SearchMatch> matches,
             int contextLines,
-            String sessionKey
+            String sessionKey,
+            String query,
+            boolean matchCase,
+            boolean wholeWord,
+            boolean regex
     ) {
     }
 
@@ -1078,26 +1117,6 @@ public final class SearchSidebar extends JPanel {
             return group.file();
         }
         return null;
-    }
-
-    private void installFilterAutoSearch(JComboBox<String> field) {
-        // Enter in the editor only — avoid combo ActionEvent (fires on history reload / setItem)
-        Component editor = field.getEditor().getEditorComponent();
-        if (editor instanceof JTextField textField) {
-            textField.addActionListener(e -> {
-                if (!suppressFilterAutoSearch) {
-                    runSearch();
-                }
-            });
-        }
-        editor.addFocusListener(new java.awt.event.FocusAdapter() {
-            @Override
-            public void focusLost(java.awt.event.FocusEvent e) {
-                if (!e.isTemporary() && !suppressFilterAutoSearch) {
-                    runSearch();
-                }
-            }
-        });
     }
 
     private static void setComboPlaceholder(JComboBox<String> combo, String placeholder) {

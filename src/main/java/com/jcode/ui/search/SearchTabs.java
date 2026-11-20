@@ -64,6 +64,14 @@ public final class SearchTabs extends JPanel {
         addSearch(false);
     }
 
+    /** Points the selected search at {@code relativeDir} (workspace-relative, empty for the root). */
+    public void searchInDirectory(String relativeDir) {
+        SearchSidebar current = selected();
+        if (current != null) {
+            current.searchInDirectory(relativeDir);
+        }
+    }
+
     public void focusSearch() {
         SearchSidebar current = selected();
         if (current != null) {

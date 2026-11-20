@@ -48,6 +48,8 @@ public final class FileTreePanel extends JPanel {
     };
     private Consumer<Path> onShowFileHistory = p -> {
     };
+    private Consumer<Path> onSearchDirectory = p -> {
+    };
 
     public FileTreePanel() {
         super(new BorderLayout());
@@ -142,6 +144,12 @@ public final class FileTreePanel extends JPanel {
             menu.add(history);
         }
 
+        if (isDir) {
+            JMenuItem searchHere = new JMenuItem("このフォルダを検索");
+            searchHere.addActionListener(e -> onSearchDirectory.accept(selected));
+            menu.add(searchHere);
+        }
+
         if (isDir && selection != null) {
             menu.addSeparator();
             JMenuItem expandAll = new JMenuItem("配下をすべて展開");
@@ -232,6 +240,11 @@ public final class FileTreePanel extends JPanel {
 
     public void setOnShowFileHistory(Consumer<Path> onShowFileHistory) {
         this.onShowFileHistory = onShowFileHistory != null ? onShowFileHistory : p -> {
+        };
+    }
+
+    public void setOnSearchDirectory(Consumer<Path> onSearchDirectory) {
+        this.onSearchDirectory = onSearchDirectory != null ? onSearchDirectory : p -> {
         };
     }
 
