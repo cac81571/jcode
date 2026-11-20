@@ -4,9 +4,11 @@ import com.jcode.model.ReplaceResult;
 import com.jcode.model.SearchFileGroup;
 import com.jcode.model.SearchMatch;
 import com.jcode.service.FilePathFilter;
+import com.jcode.service.RipgrepLocator;
 import com.jcode.service.SearchHistory;
 import com.jcode.service.SearchReportBuilder;
 import com.jcode.service.SearchService;
+import com.jcode.service.WorkspaceSearch;
 import com.jcode.ui.ClipboardPaths;
 import com.jcode.ui.PathEllipsis;
 import com.jcode.ui.ThemeManager;
@@ -37,6 +39,7 @@ import javax.swing.text.JTextComponent;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
+import javax.swing.tree.TreePath;
 import java.awt.BorderLayout;
 import java.awt.Color;
 import java.awt.Component;
@@ -51,7 +54,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -117,7 +119,10 @@ public final class SearchSidebar extends JPanel {
     /** Incremented on each search; stale SwingWorkers ignore their done(). */
     private int searchGeneration;
     private boolean searching;
-    private AtomicBoolean searchCancelled;
+    private WorkspaceSearch.Handle activeSearch;
+    private final Map<Path, DefaultMutableTreeNode> fileNodes = new LinkedHashMap<>();
+    /** Shown while a workspace search is running, e.g. {@code ripgrep}. */
+    private String runningNote = "";
 
     public SearchSidebar(Supplier<Path> workspaceRoot) {
         super(new BorderLayout(0, 8));
@@ -495,6 +500,7 @@ public final class SearchSidebar extends JPanel {
     private void runSearch() {
         String query = currentQuery().trim();
         if (query.isEmpty()) {
+            stopActiveSearch();
             clearResults();
             summary.setText(" ");
             onSearched.accept("");
@@ -506,6 +512,7 @@ public final class SearchSidebar extends JPanel {
         Path root = workspaceRoot.get();
         if (onlyOpen) {
             if (open == null || open.path() == null) {
+                stopActiveSearch();
                 clearResults();
                 summary.setText("開いているファイルがありません");
                 setResultActionsEnabled(false);
@@ -513,6 +520,7 @@ public final class SearchSidebar extends JPanel {
                 return;
             }
         } else if (root == null) {
+            stopActiveSearch();
             summary.setText("フォルダを開いてください");
             return;
         }
@@ -535,27 +543,33 @@ public final class SearchSidebar extends JPanel {
         excludeFileField.getEditor().setItem(excludeFiles);
         excludeDirField.getEditor().setItem(excludeDirs);
 
-        if (searchCancelled != null) {
-            searchCancelled.set(true);
+        if (activeSearch != null) {
+            activeSearch.cancel();
         }
         final int generation = ++searchGeneration;
-        final AtomicBoolean cancelled = new AtomicBoolean();
-        searchCancelled = cancelled;
+        final WorkspaceSearch.Handle handle = new WorkspaceSearch.Handle();
+        activeSearch = handle;
         setSearching(true);
-        summary.setText("検索中…");
+        final Path rg = onlyOpen ? null : RipgrepLocator.resolve();
+        runningNote = onlyOpen ? "" : (rg == null ? "Java・ripgrep なし" : "ripgrep");
+        summary.setText(runningNote.isEmpty() ? "検索中…" : "検索中…（" + runningNote + "）");
         onSearched.accept(query);
         clearResultsKeepingHistory();
+        lastQuery = query;
         boolean mc = matchCase.isSelected();
         boolean ww = wholeWord.isSelected();
         boolean rx = regex.isSelected();
         final ActiveFile target = open;
         final Path searchRoot = root;
+        final WorkspaceSearch.Request request = onlyOpen ? null : new WorkspaceSearch.Request(
+                searchRoot, query, mc, ww, rx, includeFiles, includeDirs, excludeFiles, excludeDirs);
 
-        new SwingWorker<List<SearchFileGroup>, Void>() {
+        new SwingWorker<WorkspaceSearch.Outcome, List<SearchMatch>>() {
             @Override
-            protected List<SearchFileGroup> doInBackground() throws Exception {
-                if (cancelled.get()) {
-                    return List.of();
+            protected WorkspaceSearch.Outcome doInBackground() {
+                if (handle.isCancelled()) {
+                    return WorkspaceSearch.Outcome.cancelled(
+                            rg == null ? WorkspaceSearch.Engine.JAVA : WorkspaceSearch.Engine.RIPGREP);
                 }
                 if (onlyOpen) {
                     Path filterRoot = searchRoot != null
@@ -563,15 +577,30 @@ public final class SearchSidebar extends JPanel {
                             : (target.path().getParent() != null ? target.path().getParent() : target.path());
                     FilePathFilter filter = FilePathFilter.parse(
                             includeFiles, includeDirs, excludeFiles, excludeDirs);
-                    if (!filter.accept(filterRoot, target.path())) {
-                        return List.of();
+                    if (filter.accept(filterRoot, target.path())) {
+                        List<SearchMatch> found = SearchService.findInText(
+                                target.text(), target.path(), query, mc, ww, rx);
+                        if (!found.isEmpty() && !handle.isCancelled()) {
+                            publish(found);
+                        }
                     }
-                    return groupByFile(SearchService.findInText(
-                            target.text(), target.path(), query, mc, ww, rx));
+                    if (handle.isCancelled()) {
+                        return WorkspaceSearch.Outcome.cancelled(WorkspaceSearch.Engine.JAVA);
+                    }
+                    return new WorkspaceSearch.Outcome(WorkspaceSearch.Engine.JAVA, false, null, null);
                 }
-                return groupByFile(SearchService.findInWorkspace(
-                        searchRoot, query, mc, ww, rx,
-                        includeFiles, includeDirs, excludeFiles, excludeDirs, cancelled::get));
+                return WorkspaceSearch.run(rg, request, handle, this::publish);
+            }
+
+            @Override
+            protected void process(List<List<SearchMatch>> chunks) {
+                if (generation != searchGeneration) {
+                    return;
+                }
+                for (List<SearchMatch> chunk : chunks) {
+                    ingest(chunk);
+                }
+                updateRunningSummary();
             }
 
             @Override
@@ -580,41 +609,177 @@ public final class SearchSidebar extends JPanel {
                     return;
                 }
                 setSearching(false);
-                if (cancelled.get()) {
-                    summary.setText("キャンセルしました");
-                    return;
-                }
                 try {
-                    List<SearchFileGroup> groups = get();
-                    lastGroups = groups;
-                    lastQuery = query;
-                    showResults(groups);
-                    int hits = groups.stream().mapToInt(SearchFileGroup::hitCount).sum();
-                    summary.setText(groups.size() + " ファイル · " + hits + " 件");
-                    setResultActionsEnabled(!groups.isEmpty());
-                    replaceAllBtn.setEnabled(!groups.isEmpty());
+                    WorkspaceSearch.Outcome outcome = get();
+                    finishSearch(query, outcome);
                 } catch (Exception ex) {
                     if (generation != searchGeneration) {
                         return;
                     }
+                    snapshotResults();
                     summary.setText("検索失敗: " + ex.getMessage());
-                    setResultActionsEnabled(false);
-                    replaceAllBtn.setEnabled(false);
+                    setResultActionsEnabled(!lastGroups.isEmpty());
+                    replaceAllBtn.setEnabled(!lastGroups.isEmpty());
                 }
             }
         }.execute();
+    }
+
+    private void finishSearch(String query, WorkspaceSearch.Outcome outcome) {
+        snapshotResults();
+        lastQuery = query;
+        int hits = lastGroups.stream().mapToInt(SearchFileGroup::hitCount).sum();
+        if (outcome != null && outcome.cancelled()) {
+            summary.setText(hits == 0
+                    ? "キャンセルしました"
+                    : "キャンセルしました · " + lastGroups.size() + " ファイル · " + hits + " 件");
+        } else if (outcome != null && outcome.error() != null) {
+            summary.setText("検索失敗: " + outcome.error());
+        } else {
+            String suffix = outcome == null ? null : outcome.summarySuffix();
+            summary.setText(resultSummary(lastGroups.size(), hits, suffix));
+        }
+        setResultActionsEnabled(!lastGroups.isEmpty());
+        replaceAllBtn.setEnabled(!lastGroups.isEmpty());
+    }
+
+    private void updateRunningSummary() {
+        int hits = 0;
+        for (int i = 0; i < rootNode.getChildCount(); i++) {
+            Object user = ((DefaultMutableTreeNode) rootNode.getChildAt(i)).getUserObject();
+            if (user instanceof SearchFileGroup group) {
+                hits += group.hitCount();
+            }
+        }
+        String text = "検索中… " + rootNode.getChildCount() + " ファイル · " + hits + " 件";
+        if (runningNote != null && !runningNote.isEmpty()) {
+            text += "（" + runningNote + "）";
+        }
+        summary.setText(text);
+    }
+
+    private static String resultSummary(int files, int hits, String suffix) {
+        String text = files + " ファイル · " + hits + " 件";
+        if (suffix != null && !suffix.isBlank()) {
+            text += "（" + suffix + "）";
+        }
+        return text;
+    }
+
+    private void ingest(List<SearchMatch> matches) {
+        if (matches == null || matches.isEmpty()) {
+            return;
+        }
+        for (SearchMatch match : matches) {
+            if (match == null || match.file() == null) {
+                continue;
+            }
+            DefaultMutableTreeNode fileNode = fileNodes.get(match.file());
+            if (fileNode == null) {
+                SearchFileGroup group = new SearchFileGroup(match.file(), new ArrayList<>());
+                fileNode = new DefaultMutableTreeNode(group);
+                int index = fileInsertIndex(match.file());
+                rootNode.insert(fileNode, index);
+                treeModel.nodesWereInserted(rootNode, new int[]{index});
+                fileNodes.put(match.file(), fileNode);
+                resultsTree.expandPath(new TreePath(fileNode.getPath()));
+            }
+            SearchFileGroup group = (SearchFileGroup) fileNode.getUserObject();
+            List<SearchMatch> list = group.matches();
+            int at = matchInsertIndex(list, match);
+            if (at < list.size()) {
+                SearchMatch existing = list.get(at);
+                if (existing.lineNumber() == match.lineNumber()
+                        && existing.startColumn() == match.startColumn()
+                        && existing.endColumn() == match.endColumn()) {
+                    continue;
+                }
+            }
+            list.add(at, match);
+            fileNode.insert(new DefaultMutableTreeNode(match), at);
+            treeModel.nodesWereInserted(fileNode, new int[]{at});
+            treeModel.nodeChanged(fileNode);
+        }
+    }
+
+    private int fileInsertIndex(Path file) {
+        String key = file.toString();
+        int count = rootNode.getChildCount();
+        int lo = 0;
+        int hi = count;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            DefaultMutableTreeNode child = (DefaultMutableTreeNode) rootNode.getChildAt(mid);
+            SearchFileGroup group = (SearchFileGroup) child.getUserObject();
+            if (group.file().toString().compareTo(key) < 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    private static int matchInsertIndex(List<SearchMatch> list, SearchMatch match) {
+        int lo = 0;
+        int hi = list.size();
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            SearchMatch existing = list.get(mid);
+            int cmp = Integer.compare(existing.lineNumber(), match.lineNumber());
+            if (cmp == 0) {
+                cmp = Integer.compare(existing.startColumn(), match.startColumn());
+            }
+            if (cmp == 0) {
+                cmp = Integer.compare(existing.endColumn(), match.endColumn());
+            }
+            if (cmp < 0) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
+
+    private void snapshotResults() {
+        List<SearchFileGroup> groups = new ArrayList<>();
+        for (int i = 0; i < rootNode.getChildCount(); i++) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) rootNode.getChildAt(i);
+            if (node.getUserObject() instanceof SearchFileGroup group) {
+                groups.add(new SearchFileGroup(group.file(), List.copyOf(group.matches())));
+            }
+        }
+        lastGroups = List.copyOf(groups);
+        flatMatches = flattenMatches(lastGroups);
+    }
+
+    private void stopActiveSearch() {
+        if (activeSearch != null) {
+            activeSearch.cancel();
+        }
+        if (searching) {
+            searchGeneration++;
+            setSearching(false);
+        }
     }
 
     private void cancelSearch() {
         if (!searching) {
             return;
         }
-        if (searchCancelled != null) {
-            searchCancelled.set(true);
+        if (activeSearch != null) {
+            activeSearch.cancel();
         }
         searchGeneration++;
         setSearching(false);
-        summary.setText("キャンセルしました");
+        snapshotResults();
+        int hits = lastGroups.stream().mapToInt(SearchFileGroup::hitCount).sum();
+        summary.setText(hits == 0
+                ? "キャンセルしました"
+                : "キャンセルしました · " + lastGroups.size() + " ファイル · " + hits + " 件");
+        setResultActionsEnabled(!lastGroups.isEmpty());
+        replaceAllBtn.setEnabled(!lastGroups.isEmpty());
     }
 
     private void setSearching(boolean searching) {
@@ -776,25 +941,6 @@ public final class SearchSidebar extends JPanel {
         ));
     }
 
-    private void showResults(List<SearchFileGroup> groups) {
-        rebuildTree(groups);
-        flatMatches = flattenMatches(groups);
-    }
-
-    private void rebuildTree(List<SearchFileGroup> groups) {
-        rootNode.removeAllChildren();
-        // Sidebar shows hit lines only; ±N context is for the editor report.
-        for (SearchFileGroup group : groups) {
-            DefaultMutableTreeNode fileNode = new DefaultMutableTreeNode(group);
-            for (SearchMatch match : group.matches()) {
-                fileNode.add(new DefaultMutableTreeNode(match));
-            }
-            rootNode.add(fileNode);
-        }
-        treeModel.reload(rootNode);
-        expandAll();
-    }
-
     private void clearResults() {
         clearResultsKeepingHistory();
     }
@@ -803,6 +949,7 @@ public final class SearchSidebar extends JPanel {
         lastGroups = List.of();
         flatMatches = List.of();
         lastQuery = "";
+        fileNodes.clear();
         setResultActionsEnabled(false);
         replaceAllBtn.setEnabled(false);
         rootNode.removeAllChildren();
@@ -827,16 +974,6 @@ public final class SearchSidebar extends JPanel {
             flat.addAll(group.matches());
         }
         return List.copyOf(flat);
-    }
-
-    private static List<SearchFileGroup> groupByFile(List<SearchMatch> matches) {
-        Map<Path, List<SearchMatch>> map = new LinkedHashMap<>();
-        for (SearchMatch match : matches) {
-            map.computeIfAbsent(match.file(), k -> new ArrayList<>()).add(match);
-        }
-        List<SearchFileGroup> groups = new ArrayList<>(map.size());
-        map.forEach((file, list) -> groups.add(new SearchFileGroup(file, List.copyOf(list))));
-        return groups;
     }
 
     public record SearchEditorRequest(
