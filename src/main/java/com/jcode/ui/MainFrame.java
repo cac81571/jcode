@@ -3,6 +3,7 @@ package com.jcode.ui;
 import com.jcode.service.ExternalOpener;
 import com.jcode.service.GitService;
 import com.jcode.service.RecentItems;
+import com.jcode.service.RipgrepLocator;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.service.SearchService;
 import com.jcode.service.WorkspaceFiles;
@@ -284,6 +285,7 @@ public final class MainFrame extends JFrame {
         file.add(item("外部エディタで開く", KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.ALT_DOWN_MASK), e -> openInExternalEditor()));
         file.add(item("サクラエディタで開く", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.ALT_DOWN_MASK), e -> openInSakura()));
         file.add(item("サクラエディタのパスを設定…", null, e -> configureSakuraPath()));
+        file.add(item("ripgrep のパスを設定…", null, e -> configureRipgrepPath()));
         file.addSeparator();
         file.add(item("保存", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK), e -> save()));
         file.add(item("すべて保存", KeyStroke.getKeyStroke(KeyEvent.VK_S, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> saveAll()));
@@ -795,6 +797,65 @@ public final class MainFrame extends JFrame {
         }
         SakuraLauncher.setConfiguredPath(selected.toString());
         statusBar.setLeft("サクラエディタ: " + selected);
+    }
+
+    private void configureRipgrepPath() {
+        Path found = RipgrepLocator.resolve();
+        String configured = RipgrepLocator.configuredPath();
+        StringBuilder message = new StringBuilder();
+        message.append("ファイル横断検索で使う ripgrep を指定します。\n");
+        message.append("未設定のときは、jar と同じフォルダの rg.exe（Windows）または rg、その次に PATH を探します。\n");
+        message.append("見つからない場合は従来の Java 検索に戻ります。\n\n");
+        message.append("現在: ").append(found == null ? "見つかりません" : found.toString());
+        if (!configured.isBlank()) {
+            message.append("\n設定値: ").append(configured);
+        }
+        Object[] options = configured.isBlank()
+                ? new Object[]{"ファイルを選択…", "キャンセル"}
+                : new Object[]{"ファイルを選択…", "設定をクリア", "キャンセル"};
+        int choice = JOptionPane.showOptionDialog(
+                this,
+                message.toString(),
+                "ripgrep のパス",
+                JOptionPane.DEFAULT_OPTION,
+                JOptionPane.PLAIN_MESSAGE,
+                null,
+                options,
+                options[0]
+        );
+        if (choice == 0) {
+            chooseRipgrepExecutable();
+        } else if (choice == 1 && !configured.isBlank()) {
+            RipgrepLocator.setConfiguredPath(null);
+            statusBar.setLeft("ripgrep の設定パスをクリアしました");
+        }
+    }
+
+    private void chooseRipgrepExecutable() {
+        JFileChooser chooser = new JFileChooser();
+        chooser.setDialogTitle(RipgrepLocator.isWindowsOs() ? "rg.exe を選択" : "rg を選択");
+        chooser.setFileSelectionMode(JFileChooser.FILES_ONLY);
+        Path current = RipgrepLocator.resolve();
+        if (current != null) {
+            chooser.setSelectedFile(current.toFile());
+            if (current.getParent() != null) {
+                chooser.setCurrentDirectory(current.getParent().toFile());
+            }
+        }
+        if (RipgrepLocator.isWindowsOs()) {
+            chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("rg.exe", "exe"));
+        }
+        if (chooser.showOpenDialog(this) != JFileChooser.APPROVE_OPTION) {
+            return;
+        }
+        Path selected = chooser.getSelectedFile().toPath().toAbsolutePath().normalize();
+        if (!Files.isRegularFile(selected)) {
+            JOptionPane.showMessageDialog(this, "有効なファイルを選んでください。",
+                    "ripgrep のパス", JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        RipgrepLocator.setConfiguredPath(selected.toString());
+        statusBar.setLeft("ripgrep: " + selected);
     }
 
     private void refreshRecentMenu() {
