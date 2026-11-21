@@ -1,12 +1,12 @@
 package com.jcode.service;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermission;
-import java.util.EnumSet;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -22,12 +22,12 @@ class RipgrepLocatorTest {
         Path jarDir = directory("jar");
         Path workDir = directory("work");
         Path pathDir = directory("path");
-        Path inJar = executable(jarDir.resolve("rg"), "jar");
-        executable(workDir.resolve("rg"), "work");
-        Path configured = executable(temp.resolve("configured-rg"), "configured");
-        executable(pathDir.resolve("rg"), "path");
+        Path inJar = file(jarDir.resolve("rg.exe"), "jar");
+        file(workDir.resolve("rg.exe"), "work");
+        Path configured = file(temp.resolve("configured-rg"), "configured");
+        file(pathDir.resolve("rg.exe"), "path");
 
-        Path found = RipgrepLocator.resolve(lookup(jarDir, workDir, configured.toString(), pathDir.toString(), false));
+        Path found = RipgrepLocator.resolve(lookup(jarDir, workDir, configured.toString(), pathDir.toString(), true));
 
         assertEquals(inJar, found);
     }
@@ -35,11 +35,11 @@ class RipgrepLocatorTest {
     @Test
     void workingDirectoryIsUsedWhenJarDirectoryHasNoBinary() throws Exception {
         Path workDir = directory("work");
-        Path inWork = executable(workDir.resolve("rg"), "work");
+        Path inWork = file(workDir.resolve("rg.exe"), "work");
         Path pathDir = directory("path");
-        executable(pathDir.resolve("rg"), "path");
+        file(pathDir.resolve("rg.exe"), "path");
 
-        Path found = RipgrepLocator.resolve(lookup(directory("empty-jar"), workDir, null, pathDir.toString(), false));
+        Path found = RipgrepLocator.resolve(lookup(directory("empty-jar"), workDir, null, pathDir.toString(), true));
 
         assertEquals(inWork, found);
     }
@@ -47,10 +47,10 @@ class RipgrepLocatorTest {
     @Test
     void configuredPathBeatsPath() throws Exception {
         Path pathDir = directory("path");
-        executable(pathDir.resolve("rg"), "path");
-        Path configured = executable(temp.resolve("configured-rg"), "configured");
+        file(pathDir.resolve("rg.exe"), "path");
+        Path configured = file(temp.resolve("configured-rg"), "configured");
 
-        Path found = RipgrepLocator.resolve(lookup(null, null, configured.toString(), pathDir.toString(), false));
+        Path found = RipgrepLocator.resolve(lookup(null, null, configured.toString(), pathDir.toString(), true));
 
         assertEquals(configured, found);
     }
@@ -58,17 +58,17 @@ class RipgrepLocatorTest {
     @Test
     void missingConfiguredPathFallsThroughToPath() throws Exception {
         Path pathDir = directory("path");
-        Path inPath = executable(pathDir.resolve("rg"), "path");
+        Path inPath = file(pathDir.resolve("rg.exe"), "path");
 
         Path found = RipgrepLocator.resolve(lookup(
-                null, null, temp.resolve("missing-rg").toString(), pathDir.toString(), false));
+                null, null, temp.resolve("missing-rg").toString(), pathDir.toString(), true));
 
         assertEquals(inPath, found);
     }
 
     @Test
     void returnsNullWhenNothingIsRunnable() {
-        assertNull(RipgrepLocator.resolve(lookup(null, null, null, temp.resolve("empty-path").toString(), false)));
+        assertNull(RipgrepLocator.resolve(lookup(null, null, null, temp.resolve("empty-path").toString(), true)));
     }
 
     @Test
@@ -84,8 +84,11 @@ class RipgrepLocatorTest {
 
     @Test
     void unixIgnoresNonExecutableFile() throws Exception {
+        Assumptions.assumeTrue(posixFilesystem(), "execute-bit checks need a POSIX filesystem");
         Path jarDir = directory("unix");
-        Files.writeString(jarDir.resolve("rg"), "not executable");
+        Path binary = jarDir.resolve("rg");
+        Files.writeString(binary, "not executable");
+        binary.toFile().setExecutable(false, false);
 
         assertNull(RipgrepLocator.resolve(lookup(jarDir, null, null, null, false)));
     }
@@ -107,13 +110,13 @@ class RipgrepLocatorTest {
         return Files.createDirectory(temp.resolve(name));
     }
 
-    private static Path executable(Path path, String body) throws Exception {
+    private static Path file(Path path, String body) throws Exception {
         Files.writeString(path, body);
-        Files.setPosixFilePermissions(path, EnumSet.of(
-                PosixFilePermission.OWNER_READ,
-                PosixFilePermission.OWNER_WRITE,
-                PosixFilePermission.OWNER_EXECUTE));
         return path.toAbsolutePath().normalize();
+    }
+
+    private static boolean posixFilesystem() {
+        return FileSystems.getDefault().supportedFileAttributeViews().contains("posix");
     }
 
     private static RipgrepLocator.Lookup lookup(

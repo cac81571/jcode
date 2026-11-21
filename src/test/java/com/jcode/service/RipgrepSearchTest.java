@@ -9,9 +9,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
@@ -114,13 +112,12 @@ class RipgrepSearchTest {
 
     @Test
     void cancelKillsTheProcess() throws Exception {
-        Assumptions.assumeTrue(Files.isExecutable(Path.of("/bin/sh")));
+        Assumptions.assumeTrue(Files.isExecutable(Path.of("/bin/sh")),
+                "cancelling a shell script needs /bin/sh");
         Path script = Files.createTempFile("fake-rg", ".sh");
         Files.writeString(script, "#!/bin/sh\nexec sleep 30\n");
-        Files.setPosixFilePermissions(script, EnumSet.of(
-                PosixFilePermission.OWNER_READ,
-                PosixFilePermission.OWNER_WRITE,
-                PosixFilePermission.OWNER_EXECUTE));
+        Assumptions.assumeTrue(script.toFile().setExecutable(true),
+                "could not mark the fake rg script executable");
         WorkspaceSearch.Handle handle = new WorkspaceSearch.Handle();
         AtomicReference<WorkspaceSearch.Outcome> outcome = new AtomicReference<>();
         Thread thread = new Thread(() -> outcome.set(WorkspaceSearch.run(
