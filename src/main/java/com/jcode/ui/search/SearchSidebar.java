@@ -641,6 +641,9 @@ public final class SearchSidebar extends JPanel {
         }
         setResultActionsEnabled(!lastGroups.isEmpty());
         replaceAllBtn.setEnabled(!lastGroups.isEmpty());
+        if (!lastGroups.isEmpty()) {
+            expandAll();
+        }
     }
 
     private void updateRunningSummary() {
@@ -682,7 +685,9 @@ public final class SearchSidebar extends JPanel {
                 rootNode.insert(fileNode, index);
                 treeModel.nodesWereInserted(rootNode, new int[]{index});
                 fileNodes.put(match.file(), fileNode);
-                resultsTree.expandPath(new TreePath(fileNode.getPath()));
+                // The new file node is still a leaf. expandPath is a no-op for leaves and
+                // does not expand the hidden root, so reveal the row via its parent instead.
+                resultsTree.makeVisible(new TreePath(fileNode.getPath()));
             }
             SearchFileGroup group = (SearchFileGroup) fileNode.getUserObject();
             List<SearchMatch> list = group.matches();
@@ -699,6 +704,9 @@ public final class SearchSidebar extends JPanel {
             fileNode.insert(new DefaultMutableTreeNode(match), at);
             treeModel.nodesWereInserted(fileNode, new int[]{at});
             treeModel.nodeChanged(fileNode);
+            // Now that the file node has a child it is no longer a leaf, so this also
+            // expands the hidden root if clear/reload left it collapsed.
+            resultsTree.expandPath(new TreePath(fileNode.getPath()));
         }
     }
 
@@ -957,9 +965,36 @@ public final class SearchSidebar extends JPanel {
     }
 
     private void expandAll() {
+        // reload() on an empty root collapses it. With the root hidden, a collapsed
+        // root has no visible rows, so expandRow never sees the files that were added later.
+        if (rootNode.getChildCount() > 0) {
+            resultsTree.expandPath(new TreePath(rootNode));
+        }
         for (int i = 0; i < resultsTree.getRowCount(); i++) {
             resultsTree.expandRow(i);
         }
+    }
+
+    /** Appends hits the same way a running search does. Used by tests. */
+    void appendMatches(List<SearchMatch> matches) {
+        ingest(matches);
+    }
+
+    /** Clears the result tree the same way a new search does. Used by tests. */
+    void resetResultTree() {
+        clearResultsKeepingHistory();
+    }
+
+    void expandAllResults() {
+        expandAll();
+    }
+
+    int visibleResultRows() {
+        return resultsTree.getRowCount();
+    }
+
+    int modelFileCount() {
+        return rootNode.getChildCount();
     }
 
     private void collapseAll() {
