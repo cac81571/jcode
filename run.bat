@@ -1,4 +1,5 @@
 @echo off
+rem ファイル横断検索を速くするには、この bat と同じフォルダ（または jar と同じフォルダ）に rg.exe を置いてください。
 setlocal
 cd /d "%~dp0"
 

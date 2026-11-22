@@ -40,6 +40,12 @@ public final class SearchService {
             "toml", "ini", "cfg", "svg", "fxml", "csv", "tsv", "log"
     );
 
+    /** Extensionless names treated as text when no include-file glob is set. */
+    private static final Set<String> SPECIAL_TEXT_FILES = Set.of("Dockerfile", "Makefile", "LICENSE");
+
+    /** Files larger than this are skipped (also passed to ripgrep as --max-filesize). */
+    static final long MAX_FILE_BYTES = 2_000_000L;
+
     /** Prefer UTF-8; fall back for Japanese Windows CSVs (Shift_JIS / MS932). */
     private static final List<Charset> READ_CHARSETS = buildReadCharsets();
 
@@ -133,7 +139,7 @@ public final class SearchService {
                 if (stop.getAsBoolean()) {
                     return FileVisitResult.TERMINATE;
                 }
-                if (attrs.size() > 2_000_000) {
+                if (attrs.size() > MAX_FILE_BYTES) {
                     return FileVisitResult.CONTINUE;
                 }
                 if (!pathFilter.accept(absoluteRoot, file)) {
@@ -256,8 +262,15 @@ public final class SearchService {
     }
 
     private static DecodedText readTextWithCharset(Path file) throws IOException {
-        byte[] bytes = Files.readAllBytes(file);
-        if (containsNul(bytes)) {
+        return decodeBytes(Files.readAllBytes(file));
+    }
+
+    /**
+     * Decode file or line bytes. UTF-8 (with BOM stripped) wins when it is strict;
+     * otherwise Windows-31J / Shift_JIS. Returns null when the buffer looks binary.
+     */
+    static DecodedText decodeBytes(byte[] bytes) {
+        if (bytes == null || containsNul(bytes)) {
             return null;
         }
         if (bytes.length >= 3
@@ -269,18 +282,55 @@ public final class SearchService {
                     StandardCharsets.UTF_8);
         }
         for (Charset charset : READ_CHARSETS) {
-            try {
-                CharsetDecoder decoder = charset.newDecoder()
-                        .onMalformedInput(CodingErrorAction.REPORT)
-                        .onUnmappableCharacter(CodingErrorAction.REPORT);
-                String text = decoder.decode(ByteBuffer.wrap(bytes)).toString();
+            String text = decodeStrict(bytes, charset);
+            if (text != null) {
                 return new DecodedText(text, charset);
-            } catch (CharacterCodingException ignored) {
-                // try next charset
             }
         }
         // Last resort: replace malformed bytes so search still works
         return new DecodedText(new String(bytes, StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+    }
+
+    static boolean isStrictUtf8(byte[] bytes) {
+        if (bytes == null || containsNul(bytes)) {
+            return false;
+        }
+        int offset = 0;
+        if (bytes.length >= 3
+                && (bytes[0] & 0xFF) == 0xEF
+                && (bytes[1] & 0xFF) == 0xBB
+                && (bytes[2] & 0xFF) == 0xBF) {
+            offset = 3;
+        }
+        return decodeStrict(bytes, offset, bytes.length - offset, StandardCharsets.UTF_8) != null;
+    }
+
+    /** Character length of {@code raw[0, byteOffset)} decoded with {@code charset}. */
+    static int prefixCharLength(byte[] raw, int byteOffset, Charset charset) {
+        if (raw == null || raw.length == 0 || byteOffset <= 0) {
+            return 0;
+        }
+        int n = Math.min(byteOffset, raw.length);
+        String strict = decodeStrict(raw, 0, n, charset);
+        if (strict != null) {
+            return strict.length();
+        }
+        return new String(raw, 0, n, charset).length();
+    }
+
+    private static String decodeStrict(byte[] bytes, Charset charset) {
+        return decodeStrict(bytes, 0, bytes.length, charset);
+    }
+
+    private static String decodeStrict(byte[] bytes, int offset, int length, Charset charset) {
+        try {
+            CharsetDecoder decoder = charset.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT);
+            return decoder.decode(ByteBuffer.wrap(bytes, offset, length)).toString();
+        } catch (CharacterCodingException ex) {
+            return null;
+        }
     }
 
     private static boolean containsNul(byte[] bytes) {
@@ -309,7 +359,19 @@ public final class SearchService {
         return List.copyOf(list);
     }
 
-    private record DecodedText(String text, Charset charset) {
+    record DecodedText(String text, Charset charset) {
+    }
+
+    static Set<String> skipDirNames() {
+        return SKIP_DIRS;
+    }
+
+    static Set<String> textExtensions() {
+        return TEXT_EXTENSIONS;
+    }
+
+    static Set<String> specialTextFiles() {
+        return SPECIAL_TEXT_FILES;
     }
 
     private static List<SearchMatch> findInText(
@@ -395,11 +457,14 @@ public final class SearchService {
         return Pattern.compile(patternText, flags);
     }
 
-    private static boolean isLikelyText(Path file) {
+    static boolean isLikelyText(Path file) {
+        if (file == null || file.getFileName() == null) {
+            return false;
+        }
         String name = file.getFileName().toString();
         int dot = name.lastIndexOf('.');
         if (dot < 0) {
-            return name.equals("Dockerfile") || name.equals("Makefile") || name.equals("LICENSE");
+            return SPECIAL_TEXT_FILES.contains(name);
         }
         String ext = name.substring(dot + 1).toLowerCase(Locale.ROOT);
         return TEXT_EXTENSIONS.contains(ext);
