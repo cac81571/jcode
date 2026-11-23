@@ -17,11 +17,16 @@ import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
 import javax.swing.Box;
 import javax.swing.BoxLayout;
+import javax.swing.ButtonGroup;
 import javax.swing.DefaultComboBoxModel;
 import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JTable;
+import javax.swing.JToggleButton;
 import javax.swing.KeyStroke;
+import javax.swing.ListSelectionModel;
+import javax.swing.table.AbstractTableModel;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
 import javax.swing.JMenuItem;
@@ -41,12 +46,16 @@ import javax.swing.tree.DefaultTreeCellRenderer;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import java.awt.BorderLayout;
+import java.awt.CardLayout;
 import java.awt.Color;
 import java.awt.Component;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.Toolkit;
+import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
+import java.awt.event.InputEvent;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.nio.file.Path;
@@ -86,6 +95,13 @@ public final class SearchSidebar extends JPanel {
     private final DefaultMutableTreeNode rootNode = new DefaultMutableTreeNode("results");
     private final DefaultTreeModel treeModel = new DefaultTreeModel(rootNode);
     private final JTree resultsTree = new JTree(treeModel);
+    private final ResultTableModel resultRows = new ResultTableModel();
+    private final JTable resultsTable = new JTable(resultRows);
+    private final CardLayout resultCards = new CardLayout();
+    private final JPanel resultBody = new JPanel(resultCards);
+    private final JToggleButton treeModeBtn = new JToggleButton("ツリー", true);
+    private final JToggleButton tableModeBtn = new JToggleButton("テーブル", false);
+    private final JButton copyTsvBtn = new JButton("TSVコピー");
     private final JButton searchBtn = new JButton("検索");
     private final JButton cancelBtn = new JButton("キャンセル");
     private final JButton collapseAllBtn = new JButton("全て折りたたむ");
@@ -171,7 +187,16 @@ public final class SearchSidebar extends JPanel {
         opts.add(wholeWord);
         opts.add(regex);
 
+        JButton extensionsBtn = new JButton("対象拡張子…");
+        extensionsBtn.setToolTipText("Include(file) が空のときに検索する拡張子");
+        extensionsBtn.addActionListener(e -> {
+            if (SearchExtensionsDialog.show(this) && !searching) {
+                summary.setText("検索の対象拡張子を保存しました");
+            }
+        });
+
         JPanel titleRow = new JPanel(new BorderLayout());
+        titleRow.add(extensionsBtn, BorderLayout.WEST);
         titleRow.add(opts, BorderLayout.EAST);
 
         replaceField.putClientProperty("JTextField.placeholderText", "置換文字列");
@@ -243,6 +268,16 @@ public final class SearchSidebar extends JPanel {
 
         foldBtns.add(expandAllBtn);
         foldBtns.add(collapseAllBtn);
+        ButtonGroup resultModes = new ButtonGroup();
+        resultModes.add(treeModeBtn);
+        resultModes.add(tableModeBtn);
+        treeModeBtn.setToolTipText("検索結果をツリーで表示");
+        tableModeBtn.setToolTipText("検索結果をテーブルで表示");
+        copyTsvBtn.setToolTipText("テーブルをタブ区切りでクリップボードにコピー");
+        copyTsvBtn.setVisible(false);
+        treeModeBtn.addActionListener(e -> showResultMode(false));
+        tableModeBtn.addActionListener(e -> showResultMode(true));
+        copyTsvBtn.addActionListener(e -> copyResultsTsv(null));
 
         JButton useHitFiles = new JButton("ヒットしたファイルを条件設定");
         useHitFiles.setToolTipText("ヒットしたファイルのパスを Include(file) にセットします");
@@ -284,18 +319,28 @@ public final class SearchSidebar extends JPanel {
         north.add(fields, BorderLayout.CENTER);
 
         setupResultsTree();
+        setupResultsTable();
 
         JPanel summaryStatus = new JPanel(new BorderLayout(8, 0));
         summaryStatus.add(summary, BorderLayout.CENTER);
         summaryStatus.add(cancelBtn, BorderLayout.EAST);
 
+        JPanel resultTools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        resultTools.add(treeModeBtn);
+        resultTools.add(tableModeBtn);
+        resultTools.add(copyTsvBtn);
+        resultTools.add(foldBtns);
+
         JPanel summaryRow = new JPanel(new BorderLayout(4, 0));
         summaryRow.add(summaryStatus, BorderLayout.CENTER);
-        summaryRow.add(foldBtns, BorderLayout.EAST);
+        summaryRow.add(resultTools, BorderLayout.EAST);
+
+        resultBody.add(new JScrollPane(resultsTree), "tree");
+        resultBody.add(new JScrollPane(resultsTable), "table");
 
         JPanel resultsArea = new JPanel(new BorderLayout(0, 4));
         resultsArea.add(summaryRow, BorderLayout.NORTH);
-        resultsArea.add(new JScrollPane(resultsTree), BorderLayout.CENTER);
+        resultsArea.add(resultBody, BorderLayout.CENTER);
 
         add(north, BorderLayout.NORTH);
         add(resultsArea, BorderLayout.CENTER);
@@ -326,6 +371,90 @@ public final class SearchSidebar extends JPanel {
             }
         });
         ClipboardPaths.install(resultsTree, this::selectedResultPath);
+    }
+
+    private void setupResultsTable() {
+        resultsTable.setSelectionMode(ListSelectionModel.MULTIPLE_INTERVAL_SELECTION);
+        resultsTable.setRowSelectionAllowed(true);
+        resultsTable.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
+        resultsTable.setFillsViewportHeight(true);
+        resultsTable.setShowGrid(false);
+        resultsTable.setRowHeight(22);
+        resultsTable.getTableHeader().setReorderingAllowed(false);
+        resultsTable.getColumnModel().getColumn(0).setPreferredWidth(48);
+        resultsTable.getColumnModel().getColumn(0).setMaxWidth(64);
+        resultsTable.getColumnModel().getColumn(1).setPreferredWidth(180);
+        resultsTable.getColumnModel().getColumn(2).setPreferredWidth(56);
+        resultsTable.getColumnModel().getColumn(2).setMaxWidth(72);
+        resultsTable.setToolTipText("クリックでファイルを開く。Ctrl+C で選択行を TSV コピー");
+        resultsTable.getSelectionModel().addListSelectionListener(e -> {
+            if (e.getValueIsAdjusting()) {
+                return;
+            }
+            int row = resultsTable.getSelectedRow();
+            if (row < 0) {
+                return;
+            }
+            SearchMatch match = resultRows.matchAt(resultsTable.convertRowIndexToModel(row));
+            if (match != null) {
+                onOpenMatch.accept(match.file(), match);
+            }
+        });
+        resultsTable.getInputMap(JComponent.WHEN_FOCUSED).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_A, InputEvent.CTRL_DOWN_MASK), "selectAll");
+        resultsTable.getInputMap(JComponent.WHEN_FOCUSED).put(
+                KeyStroke.getKeyStroke(KeyEvent.VK_C, InputEvent.CTRL_DOWN_MASK), "copyResultsTsv");
+        resultsTable.getActionMap().put("copyResultsTsv", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                int[] selected = resultsTable.getSelectedRows();
+                copyResultsTsv(selected.length == 0 ? null : selected);
+            }
+        });
+        JPopupMenu menu = new JPopupMenu();
+        JMenuItem copy = new JMenuItem("TSV形式でコピー");
+        copy.addActionListener(e -> copyResultsTsv(null));
+        menu.add(copy);
+        resultsTable.setComponentPopupMenu(menu);
+    }
+
+    private void showResultMode(boolean table) {
+        resultCards.show(resultBody, table ? "table" : "tree");
+        copyTsvBtn.setVisible(table);
+        foldBtns.setVisible(!table);
+        resultBody.revalidate();
+    }
+
+    /** {@code viewRows} null copies every row. Rows are view indexes. */
+    private void copyResultsTsv(int[] viewRows) {
+        StringBuilder out = new StringBuilder();
+        int cols = resultRows.getColumnCount();
+        for (int col = 0; col < cols; col++) {
+            if (col > 0) {
+                out.append('\t');
+            }
+            out.append(tsvCell(resultRows.getColumnName(col)));
+        }
+        int count = viewRows == null ? resultRows.getRowCount() : viewRows.length;
+        for (int i = 0; i < count; i++) {
+            int row = viewRows == null ? i : resultsTable.convertRowIndexToModel(viewRows[i]);
+            out.append("\r\n");
+            for (int col = 0; col < cols; col++) {
+                if (col > 0) {
+                    out.append('\t');
+                }
+                out.append(tsvCell(resultRows.getValueAt(row, col)));
+            }
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard()
+                .setContents(new StringSelection(out.toString()), null);
+        summary.setText("TSVをコピーしました（" + count + " 行）");
+    }
+
+    private static String tsvCell(Object value) {
+        String text = value == null ? "" : value.toString();
+        text = text.replace("\r\n", " ").replace('\n', ' ').replace('\r', ' ').replace('\t', ' ');
+        return text;
     }
 
     public void setOnOpenMatch(BiConsumer<Path, SearchMatch> onOpenMatch) {
@@ -673,6 +802,7 @@ public final class SearchSidebar extends JPanel {
         if (matches == null || matches.isEmpty()) {
             return;
         }
+        int tableFrom = resultRows.getRowCount();
         for (SearchMatch match : matches) {
             if (match == null || match.file() == null) {
                 continue;
@@ -701,6 +831,7 @@ public final class SearchSidebar extends JPanel {
                 }
             }
             list.add(at, match);
+            resultRows.add(match);
             fileNode.insert(new DefaultMutableTreeNode(match), at);
             treeModel.nodesWereInserted(fileNode, new int[]{at});
             treeModel.nodeChanged(fileNode);
@@ -708,6 +839,7 @@ public final class SearchSidebar extends JPanel {
             // expands the hidden root if clear/reload left it collapsed.
             resultsTree.expandPath(new TreePath(fileNode.getPath()));
         }
+        resultRows.fireAdded(tableFrom);
     }
 
     private int fileInsertIndex(Path file) {
@@ -962,6 +1094,7 @@ public final class SearchSidebar extends JPanel {
         replaceAllBtn.setEnabled(false);
         rootNode.removeAllChildren();
         treeModel.reload(rootNode);
+        resultRows.clear();
     }
 
     private void expandAll() {
@@ -1297,6 +1430,85 @@ public final class SearchSidebar extends JPanel {
         public Dimension getMinimumSize() {
             return getPreferredSize();
         }
+    }
+
+    private final class ResultTableModel extends AbstractTableModel {
+        private final String[] columns = {"No", "ファイル", "行", "テキスト"};
+        private final List<SearchMatch> rows = new ArrayList<>();
+
+        void add(SearchMatch match) {
+            rows.add(match);
+        }
+
+        void fireAdded(int from) {
+            if (from < rows.size()) {
+                fireTableRowsInserted(from, rows.size() - 1);
+            }
+        }
+
+        void clear() {
+            rows.clear();
+            fireTableDataChanged();
+        }
+
+        SearchMatch matchAt(int row) {
+            if (row < 0 || row >= rows.size()) {
+                return null;
+            }
+            return rows.get(row);
+        }
+
+        @Override
+        public int getRowCount() {
+            return rows.size();
+        }
+
+        @Override
+        public int getColumnCount() {
+            return columns.length;
+        }
+
+        @Override
+        public String getColumnName(int column) {
+            return columns[column];
+        }
+
+        @Override
+        public Object getValueAt(int rowIndex, int columnIndex) {
+            SearchMatch match = rows.get(rowIndex);
+            return switch (columnIndex) {
+                case 0 -> rowIndex + 1;
+                case 1 -> displayFile(match.file());
+                case 2 -> match.lineNumber();
+                case 3 -> lineCell(match.lineText());
+                default -> "";
+            };
+        }
+
+        private String displayFile(Path file) {
+            if (file == null) {
+                return "";
+            }
+            Path root = workspaceRoot.get();
+            try {
+                if (root != null && file.startsWith(root)) {
+                    return root.relativize(file).toString().replace('\\', '/');
+                }
+            } catch (IllegalArgumentException ignored) {
+                // different roots
+            }
+            return file.toString().replace('\\', '/');
+        }
+    }
+
+    private static String lineCell(String text) {
+        if (text == null) {
+            return "";
+        }
+        if (text.endsWith("\r")) {
+            text = text.substring(0, text.length() - 1);
+        }
+        return text.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
     }
 
     private Path selectedResultPath() {

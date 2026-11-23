@@ -15,6 +15,7 @@ import com.jcode.ui.explorer.FileTreePanel;
 import com.jcode.ui.explorer.QuickOpenDialog;
 import com.jcode.ui.git.GitPanel;
 import com.jcode.ui.search.FindReplaceBar;
+import com.jcode.ui.search.SearchExtensionsDialog;
 import com.jcode.service.SearchReportBuilder.TableRow;
 import com.jcode.ui.search.SearchSidebar;
 import com.jcode.ui.search.SearchTabs;
@@ -299,6 +300,11 @@ public final class MainFrame extends JFrame {
         edit.add(item("ファイル横断検索", KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK | InputEvent.SHIFT_DOWN_MASK), e -> {
             activityBar.setSelectedComponent(searchTabs);
             searchTabs.focusSearch();
+        }));
+        edit.add(item("検索の対象拡張子…", null, e -> {
+            if (SearchExtensionsDialog.show(this)) {
+                statusBar.setLeft("検索の対象拡張子を保存しました");
+            }
         }));
 
         JMenu view = new JMenu("表示");

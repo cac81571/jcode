@@ -33,13 +33,6 @@ public final class SearchService {
             ".git", "node_modules", "target", "build", ".idea", ".vscode", "out", "dist", ".cursor"
     );
 
-    private static final Set<String> TEXT_EXTENSIONS = Set.of(
-            "java", "kt", "xml", "md", "txt", "json", "yml", "yaml", "properties",
-            "gradle", "kts", "html", "css", "js", "ts", "tsx", "jsx", "py", "go",
-            "rs", "c", "h", "cpp", "hpp", "cs", "sql", "sh", "bat", "ps1", "gitignore",
-            "toml", "ini", "cfg", "svg", "fxml", "csv", "tsv", "log"
-    );
-
     /** Extensionless names treated as text when no include-file glob is set. */
     private static final Set<String> SPECIAL_TEXT_FILES = Set.of("Dockerfile", "Makefile", "LICENSE");
 
@@ -367,7 +360,7 @@ public final class SearchService {
     }
 
     static Set<String> textExtensions() {
-        return TEXT_EXTENSIONS;
+        return new LinkedHashSet<>(SearchTextTypes.extensions());
     }
 
     static Set<String> specialTextFiles() {
@@ -467,6 +460,6 @@ public final class SearchService {
             return SPECIAL_TEXT_FILES.contains(name);
         }
         String ext = name.substring(dot + 1).toLowerCase(Locale.ROOT);
-        return TEXT_EXTENSIONS.contains(ext);
+        return SearchTextTypes.contains(ext);
     }
 }
