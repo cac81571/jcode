@@ -63,6 +63,26 @@ public final class RecentItems {
         return Files.isDirectory(path) ? path.toAbsolutePath().normalize() : null;
     }
 
+    public static void forgetFolder(Path folder) {
+        if (folder == null) {
+            return;
+        }
+        String target = folder.toAbsolutePath().normalize().toString();
+        List<String> list = load(KEY_FOLDERS).stream()
+                .filter(item -> !item.equalsIgnoreCase(target))
+                .collect(Collectors.toCollection(ArrayList::new));
+        save(KEY_FOLDERS, list);
+
+        String last = PREFS.get(KEY_LAST_FOLDER, "");
+        if (last.equalsIgnoreCase(target)) {
+            if (list.isEmpty()) {
+                PREFS.remove(KEY_LAST_FOLDER);
+            } else {
+                PREFS.put(KEY_LAST_FOLDER, list.get(0));
+            }
+        }
+    }
+
     public static void clear() {
         PREFS.remove(KEY_FOLDERS);
         PREFS.remove(KEY_FILES);

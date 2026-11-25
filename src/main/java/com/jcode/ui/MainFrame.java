@@ -134,10 +134,37 @@ public final class MainFrame extends JFrame {
             return;
         }
         this.workspaceRoot = root;
+        RecentItems.rememberFolder(root);
         fileTree.setRoot(root);
         setTitle("jcode — " + root.getFileName());
         statusBar.setLeft(root.toString());
-        RecentItems.rememberFolder(root);
+        refreshRecentMenu();
+        reconnectGit();
+    }
+
+    private void forgetProject(Path folder) {
+        if (folder == null) {
+            return;
+        }
+        Path removed = folder.toAbsolutePath().normalize();
+        RecentItems.forgetFolder(removed);
+        if (workspaceRoot != null && workspaceRoot.equals(removed)) {
+            List<Path> remaining = RecentItems.folders();
+            if (!remaining.isEmpty()) {
+                openWorkspace(remaining.get(0));
+            } else {
+                clearWorkspace();
+            }
+            return;
+        }
+        refreshRecentMenu();
+    }
+
+    private void clearWorkspace() {
+        workspaceRoot = null;
+        fileTree.setRoot(null);
+        setTitle("jcode");
+        statusBar.setLeft("フォルダを開いてください");
         refreshRecentMenu();
         reconnectGit();
     }
@@ -390,6 +417,9 @@ public final class MainFrame extends JFrame {
         fileTree.setOnPreviewFile(this::previewOutline);
         fileTree.setOnShowFileHistory(this::showFileHistory);
         fileTree.setOnSearchDirectory(this::searchInDirectory);
+        fileTree.setOnSelectProject(this::openWorkspace);
+        fileTree.setOnBrowseFolder(this::openFolder);
+        fileTree.setOnForgetProject(this::forgetProject);
         searchTabs.setActiveFileSupplier(() -> {
             CodeEditorPane editor = editors.getActiveEditor();
             if (editor == null || editor.isVirtual()) {
@@ -875,6 +905,7 @@ public final class MainFrame extends JFrame {
     }
 
     private void refreshRecentMenu() {
+        fileTree.refreshProjects(workspaceRoot);
         if (recentMenu == null) {
             return;
         }

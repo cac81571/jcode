@@ -1,10 +1,17 @@
 package com.jcode.ui.explorer;
 
 import com.jcode.service.ExternalOpener;
+import com.jcode.service.RecentItems;
 import com.jcode.service.SakuraLauncher;
 import com.jcode.ui.ClipboardPaths;
 import com.jcode.ui.RowSelection;
 
+import javax.swing.BorderFactory;
+import javax.swing.DefaultComboBoxModel;
+import javax.swing.DefaultListCellRenderer;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JList;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
@@ -19,6 +26,8 @@ import javax.swing.tree.DefaultTreeModel;
 import javax.swing.tree.TreePath;
 import javax.swing.tree.TreeSelectionModel;
 import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.Insets;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -29,6 +38,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -38,10 +48,15 @@ public final class FileTreePanel extends JPanel {
     private static final Set<String> HIDDEN = Set.of(
             ".git", "node_modules", "target", ".idea", "out", "dist"
     );
+    private static final ProjectEntry BROWSE_ENTRY = new ProjectEntry(null, "フォルダを開く…");
 
+    private final DefaultComboBoxModel<ProjectEntry> projectModel = new DefaultComboBoxModel<>();
+    private final JComboBox<ProjectEntry> projectCombo = new JComboBox<>(projectModel);
+    private final JButton removeProjectBtn = new JButton("削除");
     private final JTree tree = new JTree();
     private Path root;
     private Path pendingReveal;
+    private boolean syncingProjects;
     private Consumer<Path> onOpenFile = p -> {
     };
     private Consumer<Path> onPreviewFile = p -> {
@@ -49,6 +64,12 @@ public final class FileTreePanel extends JPanel {
     private Consumer<Path> onShowFileHistory = p -> {
     };
     private Consumer<Path> onSearchDirectory = p -> {
+    };
+    private Consumer<Path> onSelectProject = p -> {
+    };
+    private Runnable onBrowseFolder = () -> {
+    };
+    private Consumer<Path> onForgetProject = p -> {
     };
 
     public FileTreePanel() {
@@ -121,8 +142,78 @@ public final class FileTreePanel extends JPanel {
 
         ClipboardPaths.install(tree, this::selectedFile);
 
+        projectCombo.setMaximumRowCount(12);
+        projectCombo.setToolTipText("プロジェクト（フォルダ）を選択");
+        projectCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(
+                    JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus
+            ) {
+                super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                if (value instanceof ProjectEntry entry) {
+                    setText(entry.label());
+                    setToolTipText(entry.path() != null ? entry.path().toString() : null);
+                }
+                return this;
+            }
+        });
+        projectCombo.addActionListener(e -> {
+            if (syncingProjects) {
+                return;
+            }
+            updateRemoveProjectEnabled();
+            Object selected = projectCombo.getSelectedItem();
+            if (!(selected instanceof ProjectEntry entry)) {
+                return;
+            }
+            if (entry.path() == null) {
+                onBrowseFolder.run();
+                refreshProjects(root);
+                return;
+            }
+            if (root != null && root.equals(entry.path())) {
+                return;
+            }
+            onSelectProject.accept(entry.path());
+        });
+
+        removeProjectBtn.setToolTipText("選択中のフォルダを一覧から削除");
+        removeProjectBtn.setFocusable(false);
+        removeProjectBtn.setMargin(new Insets(2, 8, 2, 8));
+        removeProjectBtn.addActionListener(e -> forgetSelectedProject());
+
+        JPanel header = new JPanel(new BorderLayout(4, 0));
+        header.setBorder(BorderFactory.createEmptyBorder(6, 6, 4, 6));
+        header.add(removeProjectBtn, BorderLayout.WEST);
+        header.add(projectCombo, BorderLayout.CENTER);
+
+        add(header, BorderLayout.NORTH);
         add(new JScrollPane(tree), BorderLayout.CENTER);
+        refreshProjects(null);
         setEmpty();
+    }
+
+    private void forgetSelectedProject() {
+        Object selected = projectCombo.getSelectedItem();
+        if (!(selected instanceof ProjectEntry entry) || entry.path() == null) {
+            return;
+        }
+        int answer = JOptionPane.showConfirmDialog(
+                this,
+                "一覧から削除しますか？\n" + entry.path(),
+                "プロジェクトを削除",
+                JOptionPane.YES_NO_OPTION,
+                JOptionPane.QUESTION_MESSAGE
+        );
+        if (answer != JOptionPane.YES_OPTION) {
+            return;
+        }
+        onForgetProject.accept(entry.path());
+    }
+
+    private void updateRemoveProjectEnabled() {
+        Object selected = projectCombo.getSelectedItem();
+        removeProjectBtn.setEnabled(selected instanceof ProjectEntry entry && entry.path() != null);
     }
 
     private void showContextMenu(int x, int y, Path selected) {
@@ -248,9 +339,71 @@ public final class FileTreePanel extends JPanel {
         };
     }
 
+    public void setOnSelectProject(Consumer<Path> onSelectProject) {
+        this.onSelectProject = onSelectProject != null ? onSelectProject : p -> {
+        };
+    }
+
+    public void setOnBrowseFolder(Runnable onBrowseFolder) {
+        this.onBrowseFolder = onBrowseFolder != null ? onBrowseFolder : () -> {
+        };
+    }
+
+    public void setOnForgetProject(Consumer<Path> onForgetProject) {
+        this.onForgetProject = onForgetProject != null ? onForgetProject : p -> {
+        };
+    }
+
     public void setRoot(Path root) {
         this.root = root == null ? null : root.toAbsolutePath().normalize();
+        refreshProjects(this.root);
         refresh();
+    }
+
+    /**
+     * Rebuilds the project dropdown from {@link RecentItems} and selects {@code current}.
+     */
+    public void refreshProjects(Path current) {
+        Path selected = current == null ? null : current.toAbsolutePath().normalize();
+        LinkedHashSet<Path> folders = new LinkedHashSet<>();
+        if (selected != null && Files.isDirectory(selected)) {
+            folders.add(selected);
+        }
+        folders.addAll(RecentItems.folders());
+
+        syncingProjects = true;
+        try {
+            projectModel.removeAllElements();
+            for (Path folder : folders) {
+                projectModel.addElement(new ProjectEntry(folder, folderLabel(folder)));
+            }
+            projectModel.addElement(BROWSE_ENTRY);
+
+            if (selected != null) {
+                for (int i = 0; i < projectModel.getSize(); i++) {
+                    ProjectEntry entry = projectModel.getElementAt(i);
+                    if (entry.path() != null && selected.equals(entry.path())) {
+                        projectCombo.setSelectedIndex(i);
+                        projectCombo.setToolTipText(selected.toString());
+                        updateRemoveProjectEnabled();
+                        return;
+                    }
+                }
+            }
+            projectCombo.setSelectedItem(null);
+            projectCombo.setToolTipText("プロジェクト（フォルダ）を選択");
+            updateRemoveProjectEnabled();
+        } finally {
+            syncingProjects = false;
+        }
+    }
+
+    private static String folderLabel(Path folder) {
+        Path name = folder.getFileName();
+        if (name == null) {
+            return folder.toString();
+        }
+        return name + " - " + folder;
     }
 
     public Path getRoot() {
@@ -375,6 +528,13 @@ public final class FileTreePanel extends JPanel {
     }
 
     private record PathNode(Path path, String label) {
+        @Override
+        public String toString() {
+            return label;
+        }
+    }
+
+    private record ProjectEntry(Path path, String label) {
         @Override
         public String toString() {
             return label;
