@@ -384,7 +384,7 @@ public final class SearchSidebar extends JPanel {
         resultsTable.getTableHeader().setReorderingAllowed(false);
         resultsTable.getColumnModel().getColumn(0).setPreferredWidth(48);
         resultsTable.getColumnModel().getColumn(0).setMaxWidth(64);
-        resultsTable.getColumnModel().getColumn(1).setPreferredWidth(180);
+        resultsTable.getColumnModel().getColumn(1).setPreferredWidth(120);
         resultsTable.getColumnModel().getColumn(2).setPreferredWidth(56);
         resultsTable.getColumnModel().getColumn(2).setMaxWidth(72);
         resultsTable.getColumnModel().getColumn(3).setPreferredWidth(140);
@@ -1480,7 +1480,7 @@ public final class SearchSidebar extends JPanel {
             SearchMatch match = rows.get(rowIndex);
             return switch (columnIndex) {
                 case 0 -> rowIndex + 1;
-                case 1 -> displayFile(match.file());
+                case 1 -> fileName(match.file());
                 case 2 -> match.lineNumber();
                 case 3 -> hitString(match);
                 case 4 -> lineCell(match.lineText());
@@ -1488,19 +1488,12 @@ public final class SearchSidebar extends JPanel {
             };
         }
 
-        private String displayFile(Path file) {
+        private static String fileName(Path file) {
             if (file == null) {
                 return "";
             }
-            Path root = workspaceRoot.get();
-            try {
-                if (root != null && file.startsWith(root)) {
-                    return root.relativize(file).toString().replace('\\', '/');
-                }
-            } catch (IllegalArgumentException ignored) {
-                // different roots
-            }
-            return file.toString().replace('\\', '/');
+            Path name = file.getFileName();
+            return name == null ? file.toString() : name.toString();
         }
     }
 

@@ -42,7 +42,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Search hits as a table: No / ファイル / 行数 / ヒット / ヒット文字列 / テキスト.
+ * Search hits as a table: No / ファイル / フォルダ / 行数 / ヒット / ヒット文字列 / テキスト.
  * Includes ±N context lines around each hit.
  */
 public final class SearchResultsTablePanel extends JPanel {
@@ -80,18 +80,19 @@ public final class SearchResultsTablePanel extends JPanel {
         TableColumnModel columns = table.getColumnModel();
         columns.getColumn(0).setPreferredWidth(56);
         columns.getColumn(0).setMaxWidth(72);
-        columns.getColumn(1).setPreferredWidth(260);
-        columns.getColumn(2).setPreferredWidth(64);
-        columns.getColumn(2).setMaxWidth(80);
-        columns.getColumn(3).setPreferredWidth(56);
-        columns.getColumn(3).setMaxWidth(72);
-        columns.getColumn(4).setPreferredWidth(160);
-        columns.getColumn(5).setPreferredWidth(480);
+        columns.getColumn(1).setPreferredWidth(160);
+        columns.getColumn(2).setPreferredWidth(220);
+        columns.getColumn(3).setPreferredWidth(64);
+        columns.getColumn(3).setMaxWidth(80);
+        columns.getColumn(4).setPreferredWidth(56);
+        columns.getColumn(4).setMaxWidth(72);
+        columns.getColumn(5).setPreferredWidth(160);
+        columns.getColumn(6).setPreferredWidth(480);
 
         LineRenderer cellRenderer = new LineRenderer(model, false);
         table.setDefaultRenderer(Object.class, cellRenderer);
         table.setDefaultRenderer(Integer.class, cellRenderer);
-        table.getColumnModel().getColumn(5).setCellRenderer(new LineRenderer(model, true));
+        table.getColumnModel().getColumn(6).setCellRenderer(new LineRenderer(model, true));
         ClipboardPaths.install(table, () -> {
             int row = table.getSelectedRow();
             if (row < 0) {
@@ -311,7 +312,7 @@ public final class SearchResultsTablePanel extends JPanel {
             } else {
                 setToolTipText(null);
             }
-            setHorizontalAlignment(column == 0 || column == 2 || column == 3
+            setHorizontalAlignment(column == 0 || column == 3 || column == 4
                     ? SwingConstants.CENTER
                     : SwingConstants.LEFT);
             if (!isSelected) {
@@ -386,7 +387,7 @@ public final class SearchResultsTablePanel extends JPanel {
     }
 
     private static final class ResultsModel extends AbstractTableModel {
-        private final String[] columns = {"No", "ファイル", "行数", "ヒット", "ヒット文字列", "テキスト"};
+        private final String[] columns = {"No", "ファイル", "フォルダ", "行数", "ヒット", "ヒット文字列", "テキスト"};
         private List<TableRow> rows = List.of();
         private Path root;
 
@@ -420,29 +421,49 @@ public final class SearchResultsTablePanel extends JPanel {
 
         @Override
         public Class<?> getColumnClass(int columnIndex) {
-            return columnIndex == 0 || columnIndex == 2 ? Integer.class : String.class;
+            return columnIndex == 0 || columnIndex == 3 ? Integer.class : String.class;
         }
 
         @Override
         public Object getValueAt(int rowIndex, int columnIndex) {
             TableRow line = rows.get(rowIndex);
-            String path = line.file() == null ? "" : display(line.file());
             return switch (columnIndex) {
                 case 0 -> rowIndex + 1;
-                case 1 -> path;
-                case 2 -> line.lineNumber();
-                case 3 -> line.hit() ? "●" : "";
-                case 4 -> hitText(line);
-                case 5 -> line.text() == null ? "" : line.text();
+                case 1 -> fileName(line.file());
+                case 2 -> folderPath(line.file());
+                case 3 -> line.lineNumber();
+                case 4 -> line.hit() ? "●" : "";
+                case 5 -> hitText(line);
+                case 6 -> line.text() == null ? "" : line.text();
                 default -> "";
             };
         }
 
-        private String display(Path file) {
-            if (root != null && file.startsWith(root)) {
-                return root.relativize(file).toString().replace('\\', '/');
+        private static String fileName(Path file) {
+            if (file == null) {
+                return "";
             }
-            return file.toString().replace('\\', '/');
+            Path name = file.getFileName();
+            return name == null ? file.toString() : name.toString();
+        }
+
+        private String folderPath(Path file) {
+            if (file == null) {
+                return "";
+            }
+            Path parent = file.getParent();
+            if (parent == null) {
+                return "";
+            }
+            try {
+                if (root != null && parent.startsWith(root)) {
+                    Path relative = root.relativize(parent);
+                    return relative.toString().isEmpty() ? "." : relative.toString().replace('\\', '/');
+                }
+            } catch (IllegalArgumentException ignored) {
+                // different roots
+            }
+            return parent.toString().replace('\\', '/');
         }
     }
 }
