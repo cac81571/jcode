@@ -69,7 +69,9 @@ public final class MainFrame extends JFrame {
 
     /** Default activity-bar width; Git uses 3/5 of the window (1:1:1:2 with editor). */
     private static final int SIDEBAR_WIDTH = 450;
-    /** Search widens to this when the left pane is narrower. */
+    /** Drag floor for Explorer / Git. */
+    private static final int SIDEBAR_MIN_WIDTH = 280;
+    /** Search-only drag floor; also widens the pane when opening Search under this. */
     private static final int SEARCH_SIDEBAR_MIN_WIDTH = 450;
     private static final double DEFAULT_SIDEBAR_RESIZE_WEIGHT = 0.28;
     /** Git columns + editor = 1+1+1+2 → left pane is 3/5 of the frame. */
@@ -149,7 +151,7 @@ public final class MainFrame extends JFrame {
         activityBar.addTab("検索", searchTabs);
         activityBar.addTab("Git", gitPanel);
         activityBar.setPreferredSize(new Dimension(SIDEBAR_WIDTH, 600));
-        activityBar.setMinimumSize(new Dimension(280, 200));
+        activityBar.setMinimumSize(new Dimension(SIDEBAR_MIN_WIDTH, 200));
 
         JPanel editorArea = new JPanel(new BorderLayout());
         editorArea.add(findReplaceBar, BorderLayout.NORTH);
@@ -197,6 +199,7 @@ public final class MainFrame extends JFrame {
         if (mainSplit == null) {
             return;
         }
+        applyActivityBarMinimumWidth();
         boolean gitOpen = activityBar.getSelectedComponent() == gitPanel;
         if (gitOpen && !gitSidebarActive) {
             sidebarWidthBeforeGit = mainSplit.getDividerLocation();
@@ -219,6 +222,13 @@ public final class MainFrame extends JFrame {
         } else if (searchOpen()) {
             ensureSearchSidebarWidth();
         }
+    }
+
+    /** Search alone uses 450px min; other tabs keep 280. */
+    private void applyActivityBarMinimumWidth() {
+        int minWidth = searchOpen() ? SEARCH_SIDEBAR_MIN_WIDTH : SIDEBAR_MIN_WIDTH;
+        activityBar.setMinimumSize(new Dimension(minWidth, 200));
+        mainSplit.revalidate();
     }
 
     /** Explorer can leave the pane under 450. Opening Search brings it back up. */
