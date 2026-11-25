@@ -107,8 +107,8 @@ public final class SearchSidebar extends JPanel {
     private final JButton collapseAllBtn = new JButton("全て折りたたむ");
     private final JButton expandAllBtn = new JButton("全て展開");
     private final JPanel foldBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-    private final JButton tableViewBtn = new JButton("テーブル表示");
-    private final JButton editorViewBtn = new JButton("エディタ表示");
+    private final JButton tableViewBtn = new JButton("テーブル");
+    private final JButton editorViewBtn = new JButton("エディタ");
     private final JButton replaceAllBtn = new JButton("すべて置換");
     private final Supplier<Path> workspaceRoot;
     private Supplier<ActiveFile> activeFile = () -> null;
@@ -259,7 +259,17 @@ public final class SearchSidebar extends JPanel {
         tableViewBtn.addActionListener(e -> openResults(true));
         editorViewBtn.addActionListener(e -> openResults(false));
 
+        ButtonGroup resultModes = new ButtonGroup();
+        resultModes.add(treeModeBtn);
+        resultModes.add(tableModeBtn);
+        treeModeBtn.setToolTipText("検索結果をツリーで表示");
+        tableModeBtn.setToolTipText("検索結果をテーブルで表示");
+        treeModeBtn.addActionListener(e -> showResultMode(false));
+        tableModeBtn.addActionListener(e -> showResultMode(true));
+
         JPanel editorActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        editorActions.add(treeModeBtn);
+        editorActions.add(tableModeBtn);
         editorActions.add(new JLabel("前後"));
         editorActions.add(contextSpinner);
         editorActions.add(new JLabel("行"));
@@ -268,18 +278,11 @@ public final class SearchSidebar extends JPanel {
 
         foldBtns.add(expandAllBtn);
         foldBtns.add(collapseAllBtn);
-        ButtonGroup resultModes = new ButtonGroup();
-        resultModes.add(treeModeBtn);
-        resultModes.add(tableModeBtn);
-        treeModeBtn.setToolTipText("検索結果をツリーで表示");
-        tableModeBtn.setToolTipText("検索結果をテーブルで表示");
         copyTsvBtn.setToolTipText("テーブルをタブ区切りでクリップボードにコピー");
         copyTsvBtn.setVisible(false);
-        treeModeBtn.addActionListener(e -> showResultMode(false));
-        tableModeBtn.addActionListener(e -> showResultMode(true));
         copyTsvBtn.addActionListener(e -> copyResultsTsv(null));
 
-        JButton useHitFiles = new JButton("ヒットしたファイルを条件設定");
+        JButton useHitFiles = new JButton("ヒットしたファイルで再検索");
         useHitFiles.setToolTipText("ヒットしたファイルのパスを Include(file) にセットします");
         useHitFiles.addActionListener(e -> applyHitFilesAsInclude());
         JPanel hitFileRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
@@ -326,8 +329,6 @@ public final class SearchSidebar extends JPanel {
         summaryStatus.add(cancelBtn, BorderLayout.EAST);
 
         JPanel resultTools = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
-        resultTools.add(treeModeBtn);
-        resultTools.add(tableModeBtn);
         resultTools.add(copyTsvBtn);
         resultTools.add(foldBtns);
 
