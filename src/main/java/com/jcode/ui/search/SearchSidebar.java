@@ -387,6 +387,7 @@ public final class SearchSidebar extends JPanel {
         resultsTable.getColumnModel().getColumn(1).setPreferredWidth(180);
         resultsTable.getColumnModel().getColumn(2).setPreferredWidth(56);
         resultsTable.getColumnModel().getColumn(2).setMaxWidth(72);
+        resultsTable.getColumnModel().getColumn(3).setPreferredWidth(140);
         resultsTable.setToolTipText("クリックでファイルを開く。Ctrl+C で選択行を TSV コピー");
         resultsTable.getSelectionModel().addListSelectionListener(e -> {
             if (e.getValueIsAdjusting()) {
@@ -1434,7 +1435,7 @@ public final class SearchSidebar extends JPanel {
     }
 
     private final class ResultTableModel extends AbstractTableModel {
-        private final String[] columns = {"No", "ファイル", "行", "テキスト"};
+        private final String[] columns = {"No", "ファイル", "行", "ヒット文字列", "テキスト"};
         private final List<SearchMatch> rows = new ArrayList<>();
 
         void add(SearchMatch match) {
@@ -1481,7 +1482,8 @@ public final class SearchSidebar extends JPanel {
                 case 0 -> rowIndex + 1;
                 case 1 -> displayFile(match.file());
                 case 2 -> match.lineNumber();
-                case 3 -> lineCell(match.lineText());
+                case 3 -> hitString(match);
+                case 4 -> lineCell(match.lineText());
                 default -> "";
             };
         }
@@ -1510,6 +1512,26 @@ public final class SearchSidebar extends JPanel {
             text = text.substring(0, text.length() - 1);
         }
         return text.replace('\t', ' ').replace('\n', ' ').replace('\r', ' ');
+    }
+
+    /** Matched substring from 1-based exclusive end columns. */
+    private static String hitString(SearchMatch match) {
+        String line = match.lineText();
+        if (line == null || line.isEmpty()) {
+            return "";
+        }
+        if (line.endsWith("\r")) {
+            line = line.substring(0, line.length() - 1);
+        }
+        int start = Math.max(0, match.startColumn() - 1);
+        int end = Math.min(line.length(), Math.max(start, match.endColumn() - 1));
+        if (start >= end) {
+            return "";
+        }
+        return line.substring(start, end)
+                .replace('\t', ' ')
+                .replace('\n', ' ')
+                .replace('\r', ' ');
     }
 
     private Path selectedResultPath() {

@@ -42,7 +42,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 /**
- * Search hits as a table: No / ファイル / 行数 / ヒット / テキスト.
+ * Search hits as a table: No / ファイル / 行数 / ヒット / ヒット文字列 / テキスト.
  * Includes ±N context lines around each hit.
  */
 public final class SearchResultsTablePanel extends JPanel {
@@ -85,12 +85,13 @@ public final class SearchResultsTablePanel extends JPanel {
         columns.getColumn(2).setMaxWidth(80);
         columns.getColumn(3).setPreferredWidth(56);
         columns.getColumn(3).setMaxWidth(72);
-        columns.getColumn(4).setPreferredWidth(480);
+        columns.getColumn(4).setPreferredWidth(160);
+        columns.getColumn(5).setPreferredWidth(480);
 
         LineRenderer cellRenderer = new LineRenderer(model, false);
         table.setDefaultRenderer(Object.class, cellRenderer);
         table.setDefaultRenderer(Integer.class, cellRenderer);
-        table.getColumnModel().getColumn(4).setCellRenderer(new LineRenderer(model, true));
+        table.getColumnModel().getColumn(5).setCellRenderer(new LineRenderer(model, true));
         ClipboardPaths.install(table, () -> {
             int row = table.getSelectedRow();
             if (row < 0) {
@@ -259,6 +260,27 @@ public final class SearchResultsTablePanel extends JPanel {
         return line.replace('\t', ' ').strip();
     }
 
+    /** Joined matched substrings for a row; empty for context-only lines. */
+    private static String hitText(TableRow line) {
+        if (line == null || line.text() == null || line.spans().length == 0) {
+            return "";
+        }
+        String text = line.text();
+        StringBuilder out = new StringBuilder();
+        for (int[] span : line.spans()) {
+            int start = Math.max(0, Math.min(span[0], text.length()));
+            int end = Math.max(start, Math.min(span[1], text.length()));
+            if (start >= end) {
+                continue;
+            }
+            if (out.length() > 0) {
+                out.append(", ");
+            }
+            out.append(text, start, end);
+        }
+        return out.toString();
+    }
+
     /**
      * Paints the matched substring in the text column. Other columns stay plain.
      */
@@ -364,7 +386,7 @@ public final class SearchResultsTablePanel extends JPanel {
     }
 
     private static final class ResultsModel extends AbstractTableModel {
-        private final String[] columns = {"No", "ファイル", "行数", "ヒット", "テキスト"};
+        private final String[] columns = {"No", "ファイル", "行数", "ヒット", "ヒット文字列", "テキスト"};
         private List<TableRow> rows = List.of();
         private Path root;
 
@@ -410,7 +432,8 @@ public final class SearchResultsTablePanel extends JPanel {
                 case 1 -> path;
                 case 2 -> line.lineNumber();
                 case 3 -> line.hit() ? "●" : "";
-                case 4 -> line.text() == null ? "" : line.text();
+                case 4 -> hitText(line);
+                case 5 -> line.text() == null ? "" : line.text();
                 default -> "";
             };
         }
