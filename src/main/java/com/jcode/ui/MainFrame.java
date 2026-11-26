@@ -88,6 +88,7 @@ public final class MainFrame extends JFrame {
 
     public MainFrame() {
         super("jcode");
+        setIconImages(Icons.appIcons());
         setDefaultCloseOperation(WindowConstants.DO_NOTHING_ON_CLOSE);
         setMinimumSize(new Dimension(1100, 700));
         setPreferredSize(new Dimension(1400, 900));
