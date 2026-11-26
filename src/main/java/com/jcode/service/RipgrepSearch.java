@@ -126,71 +126,99 @@ final class RipgrepSearch {
         if (handle.isCancelled()) {
             return Pass.stopped();
         }
-        List<String> command = RipgrepCommand.build(executable, request, encoding);
-        ProcessBuilder builder = new ProcessBuilder(command);
-        builder.directory(root.toFile());
-        builder.redirectErrorStream(false);
-        Process process = builder.start();
-        handle.attach(process);
-        StringBuilder errors = new StringBuilder();
-        Thread stderr = drainStderr(process, errors);
-        boolean cancelled = false;
+        Path patternFile = writePatternFile(request.query());
         try {
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    if (handle.isCancelled()) {
-                        cancelled = true;
-                        Processes.kill(process);
-                        break;
+            List<String> command = RipgrepCommand.build(executable, request, encoding, patternFile);
+            ProcessBuilder builder = new ProcessBuilder(command);
+            builder.directory(root.toFile());
+            builder.redirectErrorStream(false);
+            Process process = builder.start();
+            handle.attach(process);
+            StringBuilder errors = new StringBuilder();
+            Thread stderr = drainStderr(process, errors);
+            boolean cancelled = false;
+            try {
+                try (BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        if (handle.isCancelled()) {
+                            cancelled = true;
+                            Processes.kill(process);
+                            break;
+                        }
+                        if (line.isEmpty()) {
+                            continue;
+                        }
+                        consume(line, root, filter, emitter, seen, utf8Files, notUtf8Files, acceptRawLines, encoding != null);
                     }
-                    if (line.isEmpty()) {
-                        continue;
-                    }
-                    consume(line, root, filter, emitter, seen, utf8Files, notUtf8Files, acceptRawLines, encoding != null);
+                }
+            } catch (IOException ex) {
+                if (handle.isCancelled()) {
+                    cancelled = true;
+                } else {
+                    throw ex;
+                }
+            } finally {
+                if (cancelled || handle.isCancelled()) {
+                    Processes.kill(process);
+                }
+                handle.detach(process);
+                waitFor(process);
+                try {
+                    stderr.join(1_000);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
                 }
             }
-        } catch (IOException ex) {
-            if (handle.isCancelled()) {
-                cancelled = true;
-            } else {
-                throw ex;
-            }
-        } finally {
             if (cancelled || handle.isCancelled()) {
-                Processes.kill(process);
+                return Pass.stopped();
             }
-            handle.detach(process);
-            waitFor(process);
+            int code;
             try {
-                stderr.join(1_000);
-            } catch (InterruptedException ex) {
-                Thread.currentThread().interrupt();
+                code = process.exitValue();
+            } catch (IllegalThreadStateException ex) {
+                Processes.kill(process);
+                return Pass.failed("ripgrep が終了しませんでした");
+            }
+            String stderrText = errors.toString().trim();
+            if (encoding != null && isUnknownEncoding(stderrText)) {
+                return Pass.unknownEncoding();
+            }
+            if (code == 0 || code == 1) {
+                return Pass.ok();
+            }
+            if (emitter.emitted() > 0 && code == 2) {
+                // Partial results with a per-file IO error. Keep what streamed.
+                return Pass.ok();
+            }
+            return Pass.failed(oneLine(stderrText));
+        } finally {
+            try {
+                Files.deleteIfExists(patternFile);
+            } catch (IOException ignored) {
+                // best-effort cleanup
             }
         }
-        if (cancelled || handle.isCancelled()) {
-            return Pass.stopped();
-        }
-        int code;
+    }
+
+    /**
+     * Writes the search pattern to a temp file for {@code rg -f}.
+     * Avoids Windows command-line quoting, which mangles embedded {@code "} in {@code -e}.
+     */
+    private static Path writePatternFile(String query) throws IOException {
+        Path file = Files.createTempFile("jcode-rg-pattern-", ".txt");
         try {
-            code = process.exitValue();
-        } catch (IllegalThreadStateException ex) {
-            Processes.kill(process);
-            return Pass.failed("ripgrep が終了しませんでした");
+            Files.writeString(file, query, StandardCharsets.UTF_8);
+            return file;
+        } catch (IOException ex) {
+            try {
+                Files.deleteIfExists(file);
+            } catch (IOException ignored) {
+                // best-effort cleanup
+            }
+            throw ex;
         }
-        String stderrText = errors.toString().trim();
-        if (encoding != null && isUnknownEncoding(stderrText)) {
-            return Pass.unknownEncoding();
-        }
-        if (code == 0 || code == 1) {
-            return Pass.ok();
-        }
-        if (emitter.emitted() > 0 && code == 2) {
-            // Partial results with a per-file IO error. Keep what streamed.
-            return Pass.ok();
-        }
-        return Pass.failed(oneLine(stderrText));
     }
 
     private static void consume(

@@ -76,10 +76,12 @@ class RipgrepSearchTest {
     }
 
     @Test
-    void commandMapsOptionsOntoRgFlags() {
+    void commandMapsOptionsOntoRgFlags() throws Exception {
+        Path patternFile = Files.createTempFile("jcode-rg-pattern-", ".txt");
+        Files.writeString(patternFile, "Foo");
         WorkspaceSearch.Request request = new WorkspaceSearch.Request(
                 root, "Foo", true, true, false, "*.java", "src", "*.min.js", "target");
-        List<String> args = RipgrepCommand.build(Path.of("rg"), request, "windows-31j");
+        List<String> args = RipgrepCommand.build(Path.of("rg"), request, "windows-31j", patternFile);
 
         assertTrue(args.contains("--json"));
         assertTrue(args.contains("--no-config"));
@@ -91,11 +93,22 @@ class RipgrepSearchTest {
         assertTrue(args.contains("--word-regexp"));
         assertEquals("2000000", args.get(args.indexOf("--max-filesize") + 1));
         assertEquals("windows-31j", args.get(args.indexOf("--encoding") + 1));
-        assertEquals("Foo", args.get(args.indexOf("-e") + 1));
+        assertEquals(patternFile.toAbsolutePath().normalize().toString(), args.get(args.indexOf("-f") + 1));
+        assertFalse(args.contains("-e"));
         assertTrue(args.contains("**/src/**/*.java"));
         assertTrue(args.contains("!**/target/**"));
         assertFalse(args.contains("!*.min.js"));
         assertEquals(root.toAbsolutePath().normalize().toString(), args.getLast());
+        Files.deleteIfExists(patternFile);
+    }
+
+    @Test
+    void literalQueryWithDoubleQuoteMatches() throws Exception {
+        Assumptions.assumeTrue(rg != null, "ripgrep is not installed");
+        Files.writeString(root.resolve("src/Quotes.java"), "x \"order\" y\nfoo\"bar\n");
+        compare("\"o", false, false, false, "*.java", null, null, null);
+        compare("foo\"bar", false, false, false, "*.java", null, null, null);
+        compare("\"", false, false, false, "*.java", null, null, null);
     }
 
     @Test

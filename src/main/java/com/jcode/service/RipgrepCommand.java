@@ -8,13 +8,22 @@ import java.util.List;
  * Builds the {@code rg --json} argument list from the search sidebar options.
  * Globs are a superset of {@link FilePathFilter}; matches are filtered again in Java
  * so include / exclude semantics stay the same.
+ * <p>
+ * The pattern is read from {@code patternFile} ({@code -f}) rather than {@code -e},
+ * so Windows {@code CreateProcess} quoting cannot strip or break embedded {@code "}
+ * characters in the query.
  */
 final class RipgrepCommand {
 
     private RipgrepCommand() {
     }
 
-    static List<String> build(Path executable, WorkspaceSearch.Request request, String encodingOrNull) {
+    static List<String> build(
+            Path executable,
+            WorkspaceSearch.Request request,
+            String encodingOrNull,
+            Path patternFile
+    ) {
         List<String> args = new ArrayList<>();
         args.add(executable.toString());
         args.add("--json");
@@ -43,8 +52,8 @@ final class RipgrepCommand {
             args.add(encodingOrNull);
         }
         addGlobs(args, request);
-        args.add("-e");
-        args.add(request.query());
+        args.add("-f");
+        args.add(patternFile.toAbsolutePath().normalize().toString());
         args.add(request.root().toAbsolutePath().normalize().toString());
         return args;
     }
